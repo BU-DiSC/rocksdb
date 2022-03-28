@@ -106,6 +106,9 @@
 #include "util/string_util.h"
 #include "utilities/trace/replayer_impl.h"
 
+// sortedness stuff
+#include "sortedness/stats.h"
+
 namespace ROCKSDB_NAMESPACE {
 
 const std::string kDefaultColumnFamilyName("default");
@@ -3344,6 +3347,11 @@ bool DBImpl::GetProperty(ColumnFamilyHandle* column_family,
   value->clear();
   auto cfd =
       static_cast_with_check<ColumnFamilyHandleImpl>(column_family)->cfd();
+  
+  // sortedness addition to get stats 
+  Stats* statistics = Stats::getInstance();
+  statistics->levels_in_tree = cfd->current()->storage_info()->num_non_empty_levels();
+
   if (property_info == nullptr) {
     return false;
   } else if (property_info->handle_int) {

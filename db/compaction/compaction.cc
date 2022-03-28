@@ -18,6 +18,10 @@
 #include "test_util/sync_point.h"
 #include "util/string_util.h"
 
+// sortedness stuff
+#include "sortedness/env.h"
+#include "sortedness/stats.h"
+
 namespace ROCKSDB_NAMESPACE {
 
 const uint64_t kRangeTombstoneSentinel =
@@ -359,11 +363,15 @@ bool Compaction::IsTrivialMove() const {
 }
 
 void Compaction::AddInputDeletions(VersionEdit* out_edit) {
+  // adding code for collecting compaction count for stats
+  Stats* statistics = Stats::getInstance();
   for (size_t which = 0; which < num_input_levels(); which++) {
     for (size_t i = 0; i < inputs_[which].size(); i++) {
       out_edit->DeleteFile(level(which), inputs_[which][i]->fd.GetNumber());
     }
   }
+  // add count for compactions
+  statistics->compaction_count++;
 }
 
 bool Compaction::KeyNotExistsBeyondOutputLevel(

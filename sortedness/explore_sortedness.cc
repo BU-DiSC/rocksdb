@@ -87,7 +87,7 @@ void configOptions(EmuEnv *_env, Options *op, BlockBasedTableOptions *table_op,
   op->max_write_buffer_number = _env->max_write_buffer_number;  // min 2
 
   // enable trivial move here
-    op->compaction_options_universal.allow_trivial_move = false;
+    // op->compaction_options_universal.allow_trivial_move = true;
 
   switch (_env->memtable_factory) {
     case 1:
@@ -373,7 +373,7 @@ void configOptions(EmuEnv *_env, Options *op, BlockBasedTableOptions *table_op,
   // ReadOptions
   read_op->verify_checksums = _env->verify_checksums;
   read_op->fill_cache = _env->fill_cache;
-  read_op->iter_start_seqnum = _env->iter_start_seqnum;
+//   read_op->iter_start_seqnum = _env->iter_start_seqnum;
   read_op->ignore_range_deletions = _env->ignore_range_deletions;
   switch (_env->read_tier) {
     case 1:

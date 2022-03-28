@@ -95,3 +95,13 @@ fuzz/proto/gen/
 fuzz/crash-*
 
 cmake-build-*
+
+# sortedness stuff
+sortedness/explore_sortedness
+sortedness/db_working_home/
+sortedness/workload/
+sortedness/exp_workloads/
+
+sortedness/*.txt
+sortedness/*/*/*.txt
+sortedness/*/*/*/*.txt

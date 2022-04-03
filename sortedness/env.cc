@@ -6,11 +6,15 @@ EmuEnv* EmuEnv::instance = 0;
 EmuEnv::EmuEnv() {
   // Options set through command line
   size_ratio = 4;
-  buffer_size_in_pages = 16;
-//   entries_per_page = 4;
-//   entry_size = 1024;  // in Bytes
-entries_per_page = 512;
-entry_size = 8;
+  buffer_size_in_pages = 4096; // make this 16 for one page in L0
+  //1024
+  entries_per_page = 4;
+  entry_size = 1024;  // in Bytes
+  //512
+  // entries_per_page = 8;
+  // entry_size = 512;  // in Bytes
+  // entries_per_page = 512;
+  // entry_size = 8;
   buffer_size = buffer_size_in_pages * entries_per_page *
                 entry_size;         // M = P*B*E = 10000 * 512 * 8 B = ~40 MB
   file_to_memtable_size_ratio = 1;  // f
@@ -23,14 +27,14 @@ entry_size = 8;
   bits_per_key = 10;    // b
   experiment_runs = 1;  // run
   clear_sys_page_cache = true;  // cc
-  destroy = true;                // dd
-  use_direct_reads = false;      // dr
+  destroy = true;               // dd
+  use_direct_reads = false;     // dr
 
   // Options hardcoded in code
   // Memory allocation options
   max_write_buffer_number = 2;
   memtable_factory =
-      2;  // 1:skiplist, 2:vector, 3:hash skiplist, 4:hash linklist
+      1;  // 1:skiplist, 2:vector, 3:hash skiplist, 4:hash linklist
   target_file_size_base = buffer_size;
   level_compaction_dynamic_level_bytes = false;
   compaction_style =
@@ -42,12 +46,14 @@ entry_size = 8;
   compaction_filter_factory =
       0;  // 0:nullptr, 1:invoking custom compaction filter factory, if any
   access_hint_on_compaction_start = 2;     // TBC
-  level0_file_num_compaction_trigger = 2;  // set to 2
-  level0_slowdown_writes_trigger = 2;      // set to 2
+  level0_file_num_compaction_trigger = 4;  // set to 2
+  level0_slowdown_writes_trigger = 20;      // set to 2
   level0_stop_writes_trigger =
-      2;  // set to 2 to ensure at most 2 files in level0
+      30;  // set to 2 to ensure at most 2 files in level0
+      // must ensure slowdown_writes_trigger < stop_writes_trigger so that slowdown
+      // occurs before stalls
   target_file_size_multiplier = 1;
-  max_background_jobs = 1;
+  max_background_jobs = 64;
   max_compaction_bytes = 0;  // TBC
   max_bytes_for_level_base = buffer_size * size_ratio;
   merge_operator = 0;
@@ -56,7 +62,7 @@ entry_size = 8;
   hard_pending_compaction_bytes_limit =
       0;  // In default, no compaction anytime, try and see
   periodic_compaction_seconds = 0;
-  use_direct_io_for_flush_and_compaction = true;
+  use_direct_io_for_flush_and_compaction = false;
   num_levels =
       999;  // Maximum number of levels that a tree may have [RDB_default: 7]
 
@@ -87,7 +93,7 @@ entry_size = 8;
           // 10:kDisableCompressionOption
 
   // ReadOptions
-  verify_checksums = true;  // TBC
+  verify_checksums = false;  // TBC
   fill_cache =
       false;  // data block/index block read:this iteration will not be cached
   iter_start_seqnum = 0;          // TBC
@@ -96,10 +102,10 @@ entry_size = 8;
                   // 4:kMemtableTier
 
   // WriteOptions
-  low_pri = true;  // every insert is less important than compaction
+  low_pri = false;  // every insert is less important than compaction
   sync = false;    // make every write wait:sync with log (so we see real perf
                    // impact of insert)
-  disableWAL = false;   // TBC was false here 
+  disableWAL = false;   // TBC was false here
   no_slowdown = false;  // enabling this will make some insertions fail
   ignore_missing_column_families = false;  // TBC
 

@@ -398,7 +398,7 @@ void configOptions(EmuEnv *_env, Options *op, BlockBasedTableOptions *table_op,
 
   // statistics
   op->statistics = CreateDBStatistics();
-  op->statistics->set_stats_level(StatsLevel::kAll);
+  op->statistics->set_stats_level(StatsLevel::kExceptHistogramOrTimers);
 }
 
 int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
@@ -416,6 +416,7 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
   for (int i = 0; i < experiment_stats.num_to_be_inserted; i++) {
     int intKey = data[i] + 1;
     array_key[i] = new char[4];
+       memset(array_key[i], '\0', sizeof(char) * 4);
     memcpy(array_key[i], &intKey, sizeof(intKey));
     //   intToByte(intKey, array_key[i]);
   }
@@ -423,23 +424,30 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
 
   std::cout << "==============================================================="
             << std::endl;
+  std::cout << "Start loading data"
+            << std::endl;
+  std::cout << "==============================================================="
+            << std::endl;
   for (int i = 0; i < n; i++) {
     if (show_progress) bar.update();
-    // int intKey = data[i] + 1;
-    // convert each integer to byte array
-
-    // char key[4];
-    // memset(key, '\0', sizeof(char) * 4);
-    // EncodeVarint32(key, intKey);
-    // intToByte(intKey, key);
     // insert into the lsm tree
     my_clock start_time, end_time;
     if (my_clock_get_time(&start_time) == -1) {
       std::cerr << "Failed to get experiment start time" << std::endl;
     }
 
-    // Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
-    Status s = db->Put(*write_op, array_key[i], array_key[i]);
+    //1020
+    Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
+    
+    //508
+    // Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.aadhvajsvdjavdjvaskdjvasndvasvdasdskjdlakshjd;ka.fbakbjd.abfd.,asbanb,mnbfads");
+    
+    //124
+    // Status s = db->Put(*write_op, array_key[i], "9090");
+
+    // int temp;
+    // memcpy(&temp, array_key[i], sizeof(temp));
+    // Status s = db->Put(*write_op, array_key[i], array_key[i]);
     assert(s.ok());
     string ret_val = "";
     // s = db->Get(*read_op, key, &ret_val);
@@ -453,7 +461,12 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
   }
 
 //   assert(experiment_stats.num_inserts == experiment_stats.num_to_be_inserted);
-  cout << endl;
+  std::cout << "==============================================================="
+            << std::endl;
+  std::cout << "Finished loading data"
+            << std::endl;
+  std::cout << "==============================================================="
+            << std::endl;
 
   // delete all pointers to array_key 
   for(int i = 0; i< n; i++)
@@ -567,7 +580,9 @@ void printExperimentResults(DB *db, Statistics *db_stats, EmuEnv *_env) {
                  to_string(db_stats->getTickerCount(NUMBER_KEYS_WRITTEN))});
   stats.add_row({"#. Compactions", to_string(com_stats->compaction_count)});
   stats.add_row({"#. Levels in Tree", to_string(com_stats->levels_in_tree)});
-
+  stats.add_row({"#. Files moved trivially", to_string(com_stats->files_moved_trivial)});
+  stats.add_row({"Bytes moved trivially", to_string(com_stats->bytes_moved_trivial)});
+  stats.add_row({"#. Trivial if cond. accesses", to_string(com_stats->trivial_if_accesses)});
   // table format
   stats.format()
       .font_style({tabulate::FontStyle::bold})

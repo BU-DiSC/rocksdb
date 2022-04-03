@@ -31,6 +31,10 @@ Stats::Stats()
   // latency stats
   long exp_runtime = -1; // !YBS-sep09-XX!
 
+    files_moved_trivial = 0;
+    trivial_if_accesses=0;
+    bytes_moved_trivial=0;
+
 }
 
 void Stats::printStats() {

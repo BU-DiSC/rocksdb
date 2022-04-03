@@ -32,6 +32,10 @@ public:
   long files_read_for_compaction;
   long bytes_read_for_compaction;
 
+  long files_moved_trivial;
+  long trivial_if_accesses;
+  long bytes_moved_trivial;
+
   void printStats();
 
 

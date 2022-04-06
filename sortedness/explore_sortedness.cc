@@ -411,16 +411,26 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
   bar.set_todo_char(" ");
   bar.set_done_char("█");
 
-  char **array_key = new char *[n];
+  // char **array_key = new char *[n];
 
-  for (int i = 0; i < experiment_stats.num_to_be_inserted; i++) {
+  // for (int i = 0; i < experiment_stats.num_to_be_inserted; i++) {
+  //   int intKey = data[i] + 1;
+  //   array_key[i] = new char[4];
+  //     //  memset(array_key[i], '\0', sizeof(char) * 4);
+  //   memcpy(array_key[i], &intKey, sizeof(intKey));
+  //   //   intToByte(intKey, array_key[i]);
+  // }
+
+  vector<string> arr;
+  int width = to_string(n).length();
+  cout<<"width = "<<width<<endl;
+  for(int i = 0; i < n; i++)
+  {
     int intKey = data[i] + 1;
-    array_key[i] = new char[4];
-       memset(array_key[i], '\0', sizeof(char) * 4);
-    memcpy(array_key[i], &intKey, sizeof(intKey));
-    //   intToByte(intKey, array_key[i]);
+    std::stringstream ss;
+    ss << std::setw(width) << std::setfill('0') << intKey;
+    arr.push_back(ss.str());
   }
-
 
   std::cout << "==============================================================="
             << std::endl;
@@ -437,7 +447,8 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
     }
 
     //1020
-    Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
+    // Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
+    Status s = db->Put(*write_op, arr[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
     
     //508
     // Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.aadhvajsvdjavdjvaskdjvasndvasvdasdskjdlakshjd;ka.fbakbjd.abfd.,asbanb,mnbfads");
@@ -469,11 +480,11 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
             << std::endl;
 
   // delete all pointers to array_key 
-  for(int i = 0; i< n; i++)
-  {
-      delete array_key[i];
-  }
-  delete[] array_key;
+  // for(int i = 0; i< n; i++)
+  // {
+  //     delete array_key[i];
+  // }
+  // delete[] array_key;
   return 1;
 }
 
@@ -483,17 +494,23 @@ int performPointLookups(DB *&db, int *data, bool show_progress) {
   progressbar bar(experiment_stats.num_to_lookup);
   bar.set_todo_char(" ");
   bar.set_done_char("█");
+  
+  int width = to_string(tot_inserts).length();
+  cout<<"width = "<<width<<endl;
   for (int i = 0; i < experiment_stats.num_to_lookup; i++) {
     if (show_progress) bar.update();
     // pick a number between 1 and tot_inserts
     int query_index = (rand() % tot_inserts) + 1;
     std::string returnedValue = "";
-    char sk[4];
-    memset(sk, '\0', sizeof(char) * 4);
+    // char sk[4];
+    // memset(sk, '\0', sizeof(char) * 4);
     // // EncodeVarint32(sk, query_index);
     // intToByte(query_index, sk);
 
-    memcpy(sk, &query_index, sizeof(query_index));
+    // memcpy(sk, &query_index, sizeof(query_index));
+    std::stringstream ss;
+    ss << std::setw(width) << std::setfill('0') << query_index;
+    std::string sk = ss.str();
 
     my_clock start_time, end_time;
     if (my_clock_get_time(&start_time) == -1) {
@@ -783,9 +800,13 @@ int parse_arguments2(int argc, char *argv[], EmuEnv *_env) {
       group4, "ingestionPath", "file path for ingestion workload",
       {'i', "ingestionPath"});
 
-  //   args::Flag show_progress_cmd(group4, "showProgress",
-  //                                "Display Progress Bar for operations",
-  //                                {"pg", "showProgress"});
+  args::ValueFlag<int> compaction_style_cmd(
+      group4, "compactionStyle", "Compaction style to follow (1: Level; 2: Universal)",
+      {"CS", "compactionStyle"});
+
+  args::Flag show_progress_cmd(group4, "showProgress",
+                                 "Display Progress Bar for operations",
+                                 {"pg", "showProgress"});
 
   try {
     parser.ParseCLI(argc, argv);
@@ -839,8 +860,14 @@ int parse_arguments2(int argc, char *argv[], EmuEnv *_env) {
   _env->path = path_cmd ? args::get(path_cmd) : _env->path;
   _env->ingestion_path =
       ingestionPath_cmd ? args::get(ingestionPath_cmd) : workloadPath;
-  // cout<<"show cmd = "<<args::get(show_progress_cmd)<<endl;
-  // _env->show_progress = show_progress_cmd ? true : false;
-  _env->show_progress = true;
+  cout<<"show cmd = "<<args::get(show_progress_cmd)<<endl;
+  _env->show_progress = show_progress_cmd ? true : false;
+  // _env->show_progress = true;
+
+  _env->compaction_style =
+      compaction_style_cmd ? args::get(compaction_style_cmd) : _env->compaction_style;
+
+  cout<<"Compaction style = " << _env->compaction_style;
+
   return 0;
 }

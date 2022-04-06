@@ -23,7 +23,7 @@ Stats::Stats()
   
 
   // compaction stats
-  compaction_count = -1;
+  compaction_count = 0;
   files_read_for_compaction = -1;
   bytes_read_for_compaction = -1;
 

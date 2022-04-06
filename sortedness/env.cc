@@ -15,6 +15,7 @@ EmuEnv::EmuEnv() {
   // entry_size = 512;  // in Bytes
   // entries_per_page = 512;
   // entry_size = 8;
+  
   buffer_size = buffer_size_in_pages * entries_per_page *
                 entry_size;         // M = P*B*E = 10000 * 512 * 8 B = ~40 MB
   file_to_memtable_size_ratio = 1;  // f
@@ -34,7 +35,7 @@ EmuEnv::EmuEnv() {
   // Memory allocation options
   max_write_buffer_number = 2;
   memtable_factory =
-      1;  // 1:skiplist, 2:vector, 3:hash skiplist, 4:hash linklist
+      2;  // 1:skiplist, 2:vector, 3:hash skiplist, 4:hash linklist
   target_file_size_base = buffer_size;
   level_compaction_dynamic_level_bytes = false;
   compaction_style =
@@ -102,7 +103,7 @@ EmuEnv::EmuEnv() {
                   // 4:kMemtableTier
 
   // WriteOptions
-  low_pri = false;  // every insert is less important than compaction
+  low_pri = false;  // every insert is more important than compaction (when true)
   sync = false;    // make every write wait:sync with log (so we see real perf
                    // impact of insert)
   disableWAL = false;   // TBC was false here

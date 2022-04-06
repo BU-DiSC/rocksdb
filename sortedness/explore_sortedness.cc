@@ -36,43 +36,9 @@ struct experiment_stats {
 
 int parse_arguments2(int argc, char *argv[], EmuEnv *_env);
 
-char *EncodeVarint32(char *dst, uint32_t v) {
-  // Operate on characters as unsigneds
-  unsigned char *ptr = reinterpret_cast<unsigned char *>(dst);
-  static const int B = 128;
-  if (v < (1 << 7)) {
-    *(ptr++) = v;
-  } else if (v < (1 << 14)) {
-    *(ptr++) = v | B;
-    *(ptr++) = v >> 7;
-  } else if (v < (1 << 21)) {
-    *(ptr++) = v | B;
-    *(ptr++) = (v >> 7) | B;
-    *(ptr++) = v >> 14;
-  } else if (v < (1 << 28)) {
-    *(ptr++) = v | B;
-    *(ptr++) = (v >> 7) | B;
-    *(ptr++) = (v >> 14) | B;
-    *(ptr++) = v >> 21;
-  } else {
-    *(ptr++) = v | B;
-    *(ptr++) = (v >> 7) | B;
-    *(ptr++) = (v >> 14) | B;
-    *(ptr++) = (v >> 21) | B;
-    *(ptr++) = v >> 28;
-  }
-
-  return reinterpret_cast<char *>(ptr);
-}
-
-void intToByte(int n, char bytes[]) {
-  //   for (int i = 0; i < 4; i++)
-  //     byteArr[3 - i] = (val >> (i * 8));
-  //   std::cout << "done converting" << endl;
-  bytes[0] = (n >> 24) & 0xFF;
-  bytes[1] = (n >> 16) & 0xFF;
-  bytes[2] = (n >> 8) & 0xFF;
-  bytes[3] = n & 0xFF;
+string generateValue(long value_size) {
+  string value = std::string(value_size, 'a' + (rand() % 26));
+  return value;
 }
 
 void configOptions(EmuEnv *_env, Options *op, BlockBasedTableOptions *table_op,
@@ -402,7 +368,7 @@ void configOptions(EmuEnv *_env, Options *op, BlockBasedTableOptions *table_op,
 }
 
 int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
-                      const ReadOptions *read_op, bool show_progress) {
+                      const ReadOptions *read_op, bool show_progress, long value_size) {
   if (show_progress) cout << "Inserts\t";
 
   uint64_t progress_counter = 0;
@@ -422,14 +388,19 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
   // }
 
   vector<string> arr;
+  vector<string> values; 
   int width = to_string(n).length();
-  cout<<"width = "<<width<<endl;
+  cout<<"Width = "<<width<<endl;
+
   for(int i = 0; i < n; i++)
   {
     int intKey = data[i] + 1;
     std::stringstream ss;
     ss << std::setw(width) << std::setfill('0') << intKey;
     arr.push_back(ss.str());
+
+    // generate value string automatically
+    values.push_back(generateValue(value_size));
   }
 
   std::cout << "==============================================================="
@@ -448,7 +419,8 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
 
     //1020
     // Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
-    Status s = db->Put(*write_op, arr[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
+    //Status s = db->Put(*write_op, arr[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
+      Status s = db->Put(*write_op, arr[i], values[i]);
     
     //508
     // Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.aadhvajsvdjavdjvaskdjvasndvasvdasdskjdlakshjd;ka.fbakbjd.abfd.,asbanb,mnbfads");
@@ -472,9 +444,9 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
   }
 
 //   assert(experiment_stats.num_inserts == experiment_stats.num_to_be_inserted);
-  std::cout << "==============================================================="
-            << std::endl;
-  std::cout << "Finished loading data"
+  // std::cout << "\n==============================================================="
+  //           << std::endl;
+  std::cout << "\nFinished loading data"
             << std::endl;
   std::cout << "==============================================================="
             << std::endl;
@@ -668,9 +640,14 @@ int runExperiments(EmuEnv *_env, int *data) {
             "*****************************"
          << endl;
 
+  // calculate value size 
+  // we assume integer keys so size of int = 4
+  long value_size = _env->entry_size - sizeof(int);
+
+
   // perform ingestions
   performIngestions(db, data, &write_options, &read_options,
-                    _env->show_progress);
+                    _env->show_progress, value_size);
 
   // perform point lookups for verification
   performPointLookups(db, data, _env->show_progress);
@@ -727,7 +704,7 @@ int main(int argc, char *argv[]) {
 
   experiment_stats.num_to_be_inserted = num;
   experiment_stats.num_to_lookup = 100;
-  cout << "Show progress" << (bool)_env->show_progress << endl;
+  cout << "Show progress = " << (bool)_env->show_progress << endl;
 
   int s = runExperiments(_env, data);
   printEmulationOutput(_env);
@@ -860,7 +837,6 @@ int parse_arguments2(int argc, char *argv[], EmuEnv *_env) {
   _env->path = path_cmd ? args::get(path_cmd) : _env->path;
   _env->ingestion_path =
       ingestionPath_cmd ? args::get(ingestionPath_cmd) : workloadPath;
-  cout<<"show cmd = "<<args::get(show_progress_cmd)<<endl;
   _env->show_progress = show_progress_cmd ? true : false;
   // _env->show_progress = true;
 

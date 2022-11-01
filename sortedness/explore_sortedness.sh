@@ -10,7 +10,7 @@ fi
 DIRECTORY=$1
 
 # LOG_DIR="./lsm_e8_t4_apr10_stalloptdisabled/logs"
-LOG_DIR="./lsm_e8_t4_apr10_stalloptdisabled/logs"
+LOG_DIR="./lsm_e8_t4_nov1_stalloptdisabled/logs"
 LOG_FILE="log"
 LOG_EXT=".txt"
 

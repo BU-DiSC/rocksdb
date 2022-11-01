@@ -53,7 +53,7 @@ void configOptions(EmuEnv *_env, Options *op, BlockBasedTableOptions *table_op,
   op->max_write_buffer_number = _env->max_write_buffer_number;  // min 2
 
   // enable trivial move here
-    // op->compaction_options_universal.allow_trivial_move = true;
+  // op->compaction_options_universal.allow_trivial_move = true;
 
   switch (_env->memtable_factory) {
     case 1:
@@ -339,7 +339,7 @@ void configOptions(EmuEnv *_env, Options *op, BlockBasedTableOptions *table_op,
   // ReadOptions
   read_op->verify_checksums = _env->verify_checksums;
   read_op->fill_cache = _env->fill_cache;
-//   read_op->iter_start_seqnum = _env->iter_start_seqnum;
+  //   read_op->iter_start_seqnum = _env->iter_start_seqnum;
   read_op->ignore_range_deletions = _env->ignore_range_deletions;
   switch (_env->read_tier) {
     case 1:
@@ -367,8 +367,9 @@ void configOptions(EmuEnv *_env, Options *op, BlockBasedTableOptions *table_op,
   op->statistics->set_stats_level(StatsLevel::kExceptHistogramOrTimers);
 }
 
-int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
-                      const ReadOptions *read_op, bool show_progress, long value_size) {
+int performIngestions(DB *&db, vector<int> data, const WriteOptions *write_op,
+                      const ReadOptions *read_op, bool show_progress,
+                      long value_size) {
   if (show_progress) cout << "Inserts\t";
 
   uint64_t progress_counter = 0;
@@ -388,12 +389,11 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
   // }
 
   vector<string> arr;
-  vector<string> values; 
+  vector<string> values;
   int width = to_string(n).length();
-  cout<<"Width = "<<width<<endl;
-  cout<<"Value size = "<<value_size<<endl;
-  for(int i = 0; i < n; i++)
-  {
+  cout << "Width = " << width << endl;
+  cout << "Value size = " << value_size << endl;
+  for (int i = 0; i < n; i++) {
     int intKey = data[i] + 1;
     std::stringstream ss;
     ss << std::setw(width) << std::setfill('0') << intKey;
@@ -405,8 +405,7 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
 
   std::cout << "==============================================================="
             << std::endl;
-  std::cout << "Start loading data"
-            << std::endl;
+  std::cout << "Start loading data" << std::endl;
   std::cout << "==============================================================="
             << std::endl;
   for (int i = 0; i < n; i++) {
@@ -417,16 +416,52 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
       std::cerr << "Failed to get experiment start time" << std::endl;
     }
 
-    //1020
-    // Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
-    //Status s = db->Put(*write_op, arr[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of theasdfasdfadsfasdfadsf");
-      Status s = db->Put(*write_op, arr[i], values[i]);
-    
-    //508
-    // Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100% free online character count calculator that's simple to use. Sometimes users prefer simplicity over all of the detailed writing information Word Counter provides, and this is exactly what this tool offers. It displays character count and word count which is often the only information a person needs to know about their writing. Best of all, you receive the needed information at a lightning fast speed.aadhvajsvdjavdjvaskdjvasndvasvdasdskjdlakshjd;ka.fbakbjd.abfd.,asbanb,mnbfads");
-    
-    //124
-    // Status s = db->Put(*write_op, array_key[i], "9090");
+    // 1020
+    //  Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100%
+    //  free online character count calculator that's simple to use. Sometimes
+    //  users prefer simplicity over all of the detailed writing information
+    //  Word Counter provides, and this is exactly what this tool offers. It
+    //  displays character count and word count which is often the only
+    //  information a person needs to know about their writing. Best of all, you
+    //  receive the needed information at a lightning fast speed.Character
+    //  Counter is a 100% free online character count calculator that's simple
+    //  to use. Sometimes users prefer simplicity over all of the detailed
+    //  writing information Word Counter provides, and this is exactly what this
+    //  tool offers. It displays character count and word count which is often
+    //  the only information a person needs to know about their writing. Best of
+    //  all, you receive the needed information at a lightning fast
+    //  speed.Character Counter is a 100% free online character count calculator
+    //  that's simple to use. Sometimes users prefer simplicity over all of
+    //  theasdfasdfadsfasdfadsf");
+    // Status s = db->Put(*write_op, arr[i], "Character Counter is a 100% free
+    // online character count calculator that's simple to use. Sometimes users
+    // prefer simplicity over all of the detailed writing information Word
+    // Counter provides, and this is exactly what this tool offers. It displays
+    // character count and word count which is often the only information a
+    // person needs to know about their writing. Best of all, you receive the
+    // needed information at a lightning fast speed.Character Counter is a 100%
+    // free online character count calculator that's simple to use. Sometimes
+    // users prefer simplicity over all of the detailed writing information Word
+    // Counter provides, and this is exactly what this tool offers. It displays
+    // character count and word count which is often the only information a
+    // person needs to know about their writing. Best of all, you receive the
+    // needed information at a lightning fast speed.Character Counter is a 100%
+    // free online character count calculator that's simple to use. Sometimes
+    // users prefer simplicity over all of theasdfasdfadsfasdfadsf");
+    Status s = db->Put(*write_op, arr[i], values[i]);
+
+    // 508
+    //  Status s = db->Put(*write_op, array_key[i], "Character Counter is a 100%
+    //  free online character count calculator that's simple to use. Sometimes
+    //  users prefer simplicity over all of the detailed writing information
+    //  Word Counter provides, and this is exactly what this tool offers. It
+    //  displays character count and word count which is often the only
+    //  information a person needs to know about their writing. Best of all, you
+    //  receive the needed information at a lightning fast
+    //  speed.aadhvajsvdjavdjvaskdjvasndvasvdasdskjdlakshjd;ka.fbakbjd.abfd.,asbanb,mnbfads");
+
+    // 124
+    //  Status s = db->Put(*write_op, array_key[i], "9090");
 
     // int temp;
     // memcpy(&temp, array_key[i], sizeof(temp));
@@ -438,20 +473,21 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
     if (my_clock_get_time(&end_time) == -1) {
       std::cerr << "Failed to get experiment end time" << std::endl;
     }
-    
+
     experiment_stats.num_inserts++;
     experiment_stats.insert_time += getclock_diff_ns(start_time, end_time);
   }
 
-//   assert(experiment_stats.num_inserts == experiment_stats.num_to_be_inserted);
-  // std::cout << "\n==============================================================="
+  //   assert(experiment_stats.num_inserts ==
+  //   experiment_stats.num_to_be_inserted);
+  // std::cout <<
+  // "\n==============================================================="
   //           << std::endl;
-  std::cout << "\nFinished loading data"
-            << std::endl;
+  std::cout << "\nFinished loading data" << std::endl;
   std::cout << "==============================================================="
             << std::endl;
 
-  // delete all pointers to array_key 
+  // delete all pointers to array_key
   // for(int i = 0; i< n; i++)
   // {
   //     delete array_key[i];
@@ -460,15 +496,15 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
   return 1;
 }
 
-int performPointLookups(DB *&db, int *data, bool show_progress) {
+int performPointLookups(DB *&db, vector<int> data, bool show_progress) {
   if (show_progress) cout << "Point lookups\t";
   int tot_inserts = experiment_stats.num_inserts;
   progressbar bar(experiment_stats.num_to_lookup);
   bar.set_todo_char(" ");
   bar.set_done_char("█");
-  
+
   int width = to_string(tot_inserts).length();
-  cout<<"width = "<<width<<endl;
+  cout << "width = " << width << endl;
   for (int i = 0; i < experiment_stats.num_to_lookup; i++) {
     if (show_progress) bar.update();
     // pick a number between 1 and tot_inserts
@@ -569,9 +605,12 @@ void printExperimentResults(DB *db, Statistics *db_stats, EmuEnv *_env) {
                  to_string(db_stats->getTickerCount(NUMBER_KEYS_WRITTEN))});
   stats.add_row({"#. Compactions", to_string(com_stats->compaction_count)});
   stats.add_row({"#. Levels in Tree", to_string(com_stats->levels_in_tree)});
-  stats.add_row({"#. Files moved trivially", to_string(com_stats->files_moved_trivial)});
-  stats.add_row({"Bytes moved trivially", to_string(com_stats->bytes_moved_trivial)});
-  stats.add_row({"#. Trivial if cond. accesses", to_string(com_stats->trivial_if_accesses)});
+  stats.add_row(
+      {"#. Files moved trivially", to_string(com_stats->files_moved_trivial)});
+  stats.add_row(
+      {"Bytes moved trivially", to_string(com_stats->bytes_moved_trivial)});
+  stats.add_row({"#. Trivial if cond. accesses",
+                 to_string(com_stats->trivial_if_accesses)});
   // table format
   stats.format()
       .font_style({tabulate::FontStyle::bold})
@@ -614,7 +653,7 @@ void PrintStats(DB *db, const char *key, bool print_header = false) {
   fprintf(stdout, "\n%s\n", stats.c_str());
 }
 
-int runExperiments(EmuEnv *_env, int *data) {
+int runExperiments(EmuEnv *_env, vector<int> data) {
   DB *db;
   Options options;
   WriteOptions write_options;
@@ -640,10 +679,9 @@ int runExperiments(EmuEnv *_env, int *data) {
             "*****************************"
          << endl;
 
-  // calculate value size 
+  // calculate value size
   // we assume integer keys so size of int = 4
   long value_size = _env->entry_size - sizeof(int);
-
 
   // perform ingestions
   performIngestions(db, data, &write_options, &read_options,
@@ -675,23 +713,22 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  int *data;
+  std::vector<int> data;
   long int size = 0;
 
   Stats *instance = Stats::getInstance();
 
   // check type of inserts - either from file or uni_rand
   int num;
-  if(_env->uni_rand_inserts)
-  {
+  if (_env->uni_rand_inserts) {
     num = _env->num_inserts;
     cout << "Number of inserts to perform = " << num << endl;
     cout << "Performing uniformly random inserts...." << endl;
 
-    data = new int[num];
-    for(int i = 1; i <= num; i++)
-    {
-        data[i] = i;
+    // data = new int[num];
+    for (int i = 1; i <= num; i++) {
+      // data[i] = i;
+      data.push_back(i);
     }
 
     // now let's randomly shuffle this
@@ -701,32 +738,41 @@ int main(int argc, char *argv[]) {
     std::seed_seq seed{r(), r(), r(), r(), r(), r(), r(), r()};
     std::mt19937 eng(seed);
 
-    std::shuffle(data, data + num, eng);
-  }
-  else
-  {
-    ifstream infile(_env->ingestion_path, ios::in | ios::binary);
-    if (!infile) {
-      cout << "Cannot open file!" << endl;
-      return 0;
+    std::shuffle(data.begin(), data.end(), eng);
+  } else {
+    // ifstream infile(_env->ingestion_path, ios::in | ios::binary);
+    // if (!infile) {
+    //   cout << "Cannot open file!" << endl;
+    //   return 0;
+    // }
+    // FILE *file = fopen(_env->ingestion_path.c_str(), "rb");
+    // if (file == NULL) return 0;
+    // fseek(file, 0, SEEK_END);
+    // size = ftell(file);
+    // fclose(file);
+
+    // cout << "size = " << size << endl;
+
+    // data = new int[size / sizeof(int)];
+    // infile.read((char *)data, size);
+    // // fclose(input_file);
+    // infile.close();
+
+    // num = size / sizeof(int);
+
+    std::vector<int> data;
+    std::string line;
+    std::ifstream ifs;
+    ifs.open(_env->ingestion_path);
+    while (std::getline(ifs, line)) {
+      int key = std::stoi(line);
+      data.push_back(key);
     }
-    FILE *file = fopen(_env->ingestion_path.c_str(), "rb");
-    if (file == NULL) return 0;
-    fseek(file, 0, SEEK_END);
-    size = ftell(file);
-    fclose(file);
+    ifs.close();
 
-    cout << "size = " << size << endl;
-
-    data = new int[size / sizeof(int)];
-    infile.read((char *)data, size);
-    // fclose(input_file);
-    infile.close();
-
-    num = size / sizeof(int);
+    int num = data.size();
   }
 
-  
   cout << "Number of inserts = " << num << endl;
 
   experiment_stats.num_to_be_inserted = num;
@@ -805,20 +851,21 @@ int parse_arguments2(int argc, char *argv[], EmuEnv *_env) {
       {'i', "ingestionPath"});
 
   args::ValueFlag<int> compaction_style_cmd(
-      group4, "compactionStyle", "Compaction style to follow (1: Level; 2: Universal)",
+      group4, "compactionStyle",
+      "Compaction style to follow (1: Level; 2: Universal)",
       {"CS", "compactionStyle"});
 
   args::Flag show_progress_cmd(group4, "showProgress",
-                                 "Display Progress Bar for operations",
-                                 {"pg", "showProgress"});
-  
+                               "Display Progress Bar for operations",
+                               {"pg", "showProgress"});
+
   args::Flag uni_rand_inserts_cmd(group4, "randomInserts",
-                                 "Use uniformly random data for inserts",
-                                 {"uri", "randomInserts"});
-  
+                                  "Use uniformly random data for inserts",
+                                  {"uri", "randomInserts"});
+
   args::ValueFlag<int> num_inserts_cmd(group4, "numInserts",
-                                 "#. inserts for uni-rand ingestion",
-                                 {"ni", "numInserts"});
+                                       "#. inserts for uni-rand ingestion",
+                                       {"ni", "numInserts"});
 
   try {
     parser.ParseCLI(argc, argv);
@@ -875,13 +922,15 @@ int parse_arguments2(int argc, char *argv[], EmuEnv *_env) {
   _env->show_progress = show_progress_cmd ? true : false;
   // _env->show_progress = true;
 
-  _env->compaction_style =
-      compaction_style_cmd ? args::get(compaction_style_cmd) : _env->compaction_style;
+  _env->compaction_style = compaction_style_cmd
+                               ? args::get(compaction_style_cmd)
+                               : _env->compaction_style;
 
-  cout<<"Compaction style = " << _env->compaction_style;
+  cout << "Compaction style = " << _env->compaction_style;
 
   _env->uni_rand_inserts = uni_rand_inserts_cmd ? true : false;
 
-  _env->num_inserts = num_inserts_cmd ? args::get(num_inserts_cmd) : _env->num_inserts;
+  _env->num_inserts =
+      num_inserts_cmd ? args::get(num_inserts_cmd) : _env->num_inserts;
   return 0;
 }

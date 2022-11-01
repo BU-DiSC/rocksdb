@@ -23,8 +23,8 @@ void generate_one_file(unsigned long long pTOTAL_NUMBERS, unsigned int pdomain, 
     srand(time(NULL));
     outfile.open("dataledger.txt", std::ios_base::app);
 
-    // std::string folder_name = "workload/";
-    std::string folder_name = "exp_workloads/";
+    std::string folder_name = "workload/";
+    // std::string folder_name = "exp_workloads/";
     // std::string folder_name = "vary_buffer_workload/";
     //    std::string folder_name = "sorting_workload/";
     outfile << generate_partitions_stream(pTOTAL_NUMBERS, pdomain, pL, ppercent_outRange, plpercentage, pseed, folder_name, type) << std::endl;

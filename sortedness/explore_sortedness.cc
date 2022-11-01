@@ -391,7 +391,7 @@ int performIngestions(DB *&db, int *data, const WriteOptions *write_op,
   vector<string> values; 
   int width = to_string(n).length();
   cout<<"Width = "<<width<<endl;
-
+  cout<<"Value size = "<<value_size<<endl;
   for(int i = 0; i < n; i++)
   {
     int intKey = data[i] + 1;
@@ -680,30 +680,57 @@ int main(int argc, char *argv[]) {
 
   Stats *instance = Stats::getInstance();
 
-  ifstream infile(_env->ingestion_path, ios::in | ios::binary);
-  if (!infile) {
-    cout << "Cannot open file!" << endl;
-    return 0;
+  // check type of inserts - either from file or uni_rand
+  int num;
+  if(_env->uni_rand_inserts)
+  {
+    num = _env->num_inserts;
+    cout << "Number of inserts to perform = " << num << endl;
+    cout << "Performing uniformly random inserts...." << endl;
+
+    data = new int[num];
+    for(int i = 1; i <= num; i++)
+    {
+        data[i] = i;
+    }
+
+    // now let's randomly shuffle this
+    srand(time(0));
+    // std::random_shuffle(indexes, indexes + n);
+    std::random_device r;
+    std::seed_seq seed{r(), r(), r(), r(), r(), r(), r(), r()};
+    std::mt19937 eng(seed);
+
+    std::shuffle(data, data + num, eng);
   }
-  FILE *file = fopen(_env->ingestion_path.c_str(), "rb");
-  if (file == NULL) return 0;
-  fseek(file, 0, SEEK_END);
-  size = ftell(file);
-  fclose(file);
+  else
+  {
+    ifstream infile(_env->ingestion_path, ios::in | ios::binary);
+    if (!infile) {
+      cout << "Cannot open file!" << endl;
+      return 0;
+    }
+    FILE *file = fopen(_env->ingestion_path.c_str(), "rb");
+    if (file == NULL) return 0;
+    fseek(file, 0, SEEK_END);
+    size = ftell(file);
+    fclose(file);
 
-  cout << "size = " << size << endl;
+    cout << "size = " << size << endl;
 
-  data = new int[size / sizeof(int)];
-  infile.read((char *)data, size);
-  // fclose(input_file);
-  infile.close();
+    data = new int[size / sizeof(int)];
+    infile.read((char *)data, size);
+    // fclose(input_file);
+    infile.close();
 
-  int num = size / sizeof(int);
+    num = size / sizeof(int);
+  }
 
+  
   cout << "Number of inserts = " << num << endl;
 
   experiment_stats.num_to_be_inserted = num;
-  experiment_stats.num_to_lookup = 100;
+  experiment_stats.num_to_lookup = 0;
   cout << "Show progress = " << (bool)_env->show_progress << endl;
 
   int s = runExperiments(_env, data);
@@ -784,6 +811,14 @@ int parse_arguments2(int argc, char *argv[], EmuEnv *_env) {
   args::Flag show_progress_cmd(group4, "showProgress",
                                  "Display Progress Bar for operations",
                                  {"pg", "showProgress"});
+  
+  args::Flag uni_rand_inserts_cmd(group4, "randomInserts",
+                                 "Use uniformly random data for inserts",
+                                 {"uri", "randomInserts"});
+  
+  args::ValueFlag<int> num_inserts_cmd(group4, "numInserts",
+                                 "#. inserts for uni-rand ingestion",
+                                 {"ni", "numInserts"});
 
   try {
     parser.ParseCLI(argc, argv);
@@ -845,5 +880,8 @@ int parse_arguments2(int argc, char *argv[], EmuEnv *_env) {
 
   cout<<"Compaction style = " << _env->compaction_style;
 
+  _env->uni_rand_inserts = uni_rand_inserts_cmd ? true : false;
+
+  _env->num_inserts = num_inserts_cmd ? args::get(num_inserts_cmd) : _env->num_inserts;
   return 0;
 }

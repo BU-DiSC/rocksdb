@@ -290,6 +290,9 @@ public:
   long num_rq_executed;
   bool only_tune;
   int num_read_query_sessions;
+
+  bool uni_rand_inserts;
+  // int num_inserts;
 };
 
 #endif /*EMU_ENVIRONMENT_H_*/

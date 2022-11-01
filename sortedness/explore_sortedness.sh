@@ -9,7 +9,8 @@ fi
 
 DIRECTORY=$1
 
-LOG_DIR="./lsm_fixedl5_t4_levelled_trivialoff/logs"
+# LOG_DIR="./lsm_e8_t4_apr10_stalloptdisabled/logs"
+LOG_DIR="./lsm_e8_t4_apr10_stalloptdisabled/logs"
 LOG_FILE="log"
 LOG_EXT=".txt"
 
@@ -20,8 +21,8 @@ NUM=500000000
 # run workload generator for NUM+OSMBuffer size elements first 
 # ./run_workload_generator.sh m 101000000 ${L_P} bin
 # ./run_workload_generator.sh m 1010000000 ${L_P} bin
-# ./run_workload_generator.sh m 505000000 5 bin
-
+# ./run_workload_generator.sh m 500000000 5 bin
+# ./run_workload_generator.sh m 4000000 5 bin
 make
 
 for FILE in $DIRECTORY/*; do 
@@ -42,9 +43,9 @@ for FILE in $DIRECTORY/*; do
     echo "echo 3 > /proc/sys/vm/drop_caches"
 
     # clear db directory before every run 
-    rm -r db_working_home/*
+    rm -r /scratchSSD/aneeshr/lsm_exp_data_dump/db_working_home/*
 
-    ./explore_sortedness -i ${FILE} -p ./db_working_home > "${LOG_DIR}/${LOG_FILE}_${NOISE}_${L}${LOG_EXT}"
+    ./explore_sortedness -i ${FILE} -p /scratchSSD/aneeshr/lsm_exp_data_dump/db_working_home/ > "${LOG_DIR}/${LOG_FILE}_${NOISE}_${L}${LOG_EXT}"
     # break
 
     # rm ${FILE}   

@@ -6,15 +6,16 @@ EmuEnv* EmuEnv::instance = 0;
 EmuEnv::EmuEnv() {
   // Options set through command line
   size_ratio = 4;
-  buffer_size_in_pages = 4096; // make this 16 for one page in L0
+  // buffer_size_in_pages = 4096; // make this 16 for one page in L0
+  buffer_size_in_pages = 10240; // to targer 40MB buffer with E=8 B=512
   //1024
-  entries_per_page = 4;
-  entry_size = 1024;  // in Bytes
+  // entries_per_page = 4;
+  // entry_size = 1024;  // in Bytes
   //512
   // entries_per_page = 8;
   // entry_size = 512;  // in Bytes
-  // entries_per_page = 512;
-  // entry_size = 8;
+  entries_per_page = 512;
+  entry_size = 8;
   
   buffer_size = buffer_size_in_pages * entries_per_page *
                 entry_size;         // M = P*B*E = 10000 * 512 * 8 B = ~40 MB
@@ -47,14 +48,14 @@ EmuEnv::EmuEnv() {
   compaction_filter_factory =
       0;  // 0:nullptr, 1:invoking custom compaction filter factory, if any
   access_hint_on_compaction_start = 2;     // TBC
-  level0_file_num_compaction_trigger = 4;  // set to 2
-  level0_slowdown_writes_trigger = 20;      // set to 2
+  level0_file_num_compaction_trigger = 2;  // set to 2 or 4
+  level0_slowdown_writes_trigger = 2;      // set to 2 or 20
   level0_stop_writes_trigger =
-      30;  // set to 2 to ensure at most 2 files in level0
+      2;  // set to 2 to ensure at most 2 files in level0 or 30
       // must ensure slowdown_writes_trigger < stop_writes_trigger so that slowdown
       // occurs before stalls
   target_file_size_multiplier = 1;
-  max_background_jobs = 64;
+  max_background_jobs = 1;
   max_compaction_bytes = 0;  // TBC
   max_bytes_for_level_base = buffer_size * size_ratio;
   merge_operator = 0;
@@ -148,9 +149,6 @@ EmuEnv::EmuEnv() {
   wait = true;
   allow_write_stall = true;
 
-  // Workload options -- not sure if necessary to have these here!
-  int num_inserts = 0;
-
   // old options
 
   path = "./db_working_home/";
@@ -182,6 +180,9 @@ EmuEnv::EmuEnv() {
   num_rq_executed = 0;
   only_tune = false;
   num_read_query_sessions = 1;
+
+  uni_rand_inserts = false;
+  num_inserts = 1000000;
 }
 
 EmuEnv* EmuEnv::getInstance() {

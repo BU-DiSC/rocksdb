@@ -32,7 +32,7 @@ TOTAL_ELEMENTS=$2
 WINDOW_SIZE=1
 SEED_VALUE=1
 
-mkdir -p workload/$L_PERCENTAGE-L/
+mkdir -p workload/
 # mkdir -p workload/$L_PERCENTAGE-L/arr/
 
 for N in "${NOISE[@]}"; do 

@@ -33,7 +33,7 @@ export BETA=1
 # # rm workloads/*
 # K=1 L=100 ./benchmark.sh $WORKLOAD_OPT $NUM_PERCENT $NUM_QUERIES
 # # rm workloads/*
-K=10 L=5 ./benchmark.sh $WORKLOAD_OPT $NUM_PERCENT $NUM_QUERIES
+# K=10 L=5 ./benchmark.sh $WORKLOAD_OPT $NUM_PERCENT $NUM_QUERIES
 # # rm workloads/*
 # K=5 L=5 ./benchmark.sh $WORKLOAD_OPT $NUM_PERCENT $NUM_QUERIES
 # # rm workloads/*
@@ -43,4 +43,4 @@ K=10 L=5 ./benchmark.sh $WORKLOAD_OPT $NUM_PERCENT $NUM_QUERIES
 
 # K=100 L=100 ./benchmark.sh $WORKLOAD_OPT $NUM_PERCENT $NUM_QUERIES
 
-K=100 L=25 ./benchmark.sh $WORKLOAD_OPT $NUM_PERCENT $NUM_QUERIES
+K=100 L=50 ./benchmark.sh $WORKLOAD_OPT $NUM_PERCENT $NUM_QUERIES

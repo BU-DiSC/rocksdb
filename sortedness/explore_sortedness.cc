@@ -374,6 +374,7 @@ int performIngestions(DB *&db, vector<int> data, const WriteOptions *write_op,
 
   uint64_t progress_counter = 0;
   int n = experiment_stats.num_to_be_inserted;
+  cout<<"n = "<<n;
   progressbar bar(n);
   bar.set_todo_char(" ");
   bar.set_done_char("█");
@@ -402,6 +403,8 @@ int performIngestions(DB *&db, vector<int> data, const WriteOptions *write_op,
     // generate value string automatically
     values.push_back(generateValue(value_size));
   }
+
+  cout << "arr size" << arr.size();
 
   std::cout << "==============================================================="
             << std::endl;
@@ -721,6 +724,7 @@ int main(int argc, char *argv[]) {
   // check type of inserts - either from file or uni_rand
   int num;
   if (_env->uni_rand_inserts) {
+    cout<<"uni rand"<<endl;
     num = _env->num_inserts;
     cout << "Number of inserts to perform = " << num << endl;
     cout << "Performing uniformly random inserts...." << endl;
@@ -760,7 +764,7 @@ int main(int argc, char *argv[]) {
 
     // num = size / sizeof(int);
 
-    std::vector<int> data;
+    
     std::string line;
     std::ifstream ifs;
     ifs.open(_env->ingestion_path);
@@ -770,9 +774,10 @@ int main(int argc, char *argv[]) {
     }
     ifs.close();
 
-    int num = data.size();
+    num = data.size();
+    cout << "num = " << num << endl;
   }
-
+  cout<<"data size = "<<data.size()<<endl;
   cout << "Number of inserts = " << num << endl;
 
   experiment_stats.num_to_be_inserted = num;

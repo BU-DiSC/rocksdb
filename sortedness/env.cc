@@ -181,8 +181,8 @@ EmuEnv::EmuEnv() {
   only_tune = false;
   num_read_query_sessions = 1;
 
-  uni_rand_inserts = false;
-  num_inserts = 1000000;
+  uni_rand_inserts = true;
+  num_inserts = 505000000;
 }
 
 EmuEnv* EmuEnv::getInstance() {

@@ -21,6 +21,9 @@ CFLAGS += -Wstrict-prototypes
 
 all: explore_sortedness
 
+sortedness_data_generator:
+	g++ -g args.hxx progressbar.hpp sortedness_data_generator.cpp -o sortedness_data_generator
+
 explore_sortedness: librocksdb explore_sortedness.cc env.cc workload_stats.cc aux_time.cc stats.cc
 	$(CXX) $(CXXFLAGS) $@.cc -o$@ env.cc workload_stats.cc aux_time.cc stats.cc ../librocksdb.a -I../include -O2 -g -std=c++11  $(PLATFORM_LDFLAGS) $(PLATFORM_CXXFLAGS) $(EXEC_LDFLAGS)
 

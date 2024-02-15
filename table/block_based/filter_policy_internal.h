@@ -309,9 +309,36 @@ class RibbonFilterPolicy : public BloomLikeFilterPolicy {
   std::atomic<int> bloom_before_level_;
 };
 
+class MonkeyFilterPolicy : public BloomLikeFilterPolicy {
+ public:
+  explicit MonkeyFilterPolicy(double bits_per_key, int size_ratio,
+                              size_t num_levels);
+
+  FilterBitsBuilder* GetBuilderWithContext(
+      const FilterBuildingContext& context) const override;
+
+  static const char* kClassName();
+  const char* Name() const override { return kClassName(); }
+  static const char* kNickName();
+  const char* NickName() const override { return kNickName(); }
+  static const char* kName();
+  std::string GetId() const override;
+
+ private:
+  double default_bpe;
+  int size_ratio_;
+  size_t levels_;
+  std::vector<double> level_fpr_opt;
+  std::vector<double> level_bpe;
+  const std::unique_ptr<const FilterPolicy> default_policy;
+  std::vector<const FilterPolicy*> policy_per_level;
+
+  double optimal_false_positive_rate(size_t curr_level);
+  void allocate_bits_per_level();
+};
+
 // For testing only, but always constructable with internal names
 namespace test {
-
 class LegacyBloomFilterPolicy : public BloomLikeFilterPolicy {
  public:
   explicit LegacyBloomFilterPolicy(double bits_per_key)

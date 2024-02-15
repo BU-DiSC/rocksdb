@@ -2073,4 +2073,58 @@ const std::vector<std::string>& BloomLikeFilterPolicy::GetAllFixedImpls() {
   return impls;
 }
 
+const char* MonkeyFilterPolicy::kClassName() { return "monkeyfilter"; }
+const char* MonkeyFilterPolicy::kNickName() { return "rocksdb.MonkeyFilter"; }
+const char* MonkeyFilterPolicy::kName() { return "MonkeyFilterPolicy"; }
+
+FilterPolicy* NewMonkeyFilterPolicy(double bits_per_key, int size_ratio,
+                                    size_t levels) {
+  return new MonkeyFilterPolicy(bits_per_key, size_ratio, levels);
+}
+
+MonkeyFilterPolicy::MonkeyFilterPolicy(double bits_per_key, int size_ratio,
+                                       size_t levels)
+    : BloomLikeFilterPolicy(bits_per_key),
+      default_bpe(bits_per_key),
+      size_ratio_(size_ratio),
+      levels_(levels),
+      default_policy(NewBloomFilterPolicy(bits_per_key)) {
+  this->allocate_bits_per_level();
+}
+
+void MonkeyFilterPolicy::allocate_bits_per_level() {
+  this->policy_per_level.clear();
+  this->level_fpr_opt.clear();
+  this->level_bpe.clear();
+  for (size_t level = 0; level < this->levels_; level++) {
+    this->level_fpr_opt.push_back(this->optimal_false_positive_rate(level + 1));
+    this->level_bpe.push_back(-1 * std::log(this->level_fpr_opt[level]) /
+                              LOG2SQUARED);
+    this->policy_per_level.push_back(
+        rocksdb::NewBloomFilterPolicy(this->level_bpe[level]));
+  }
+}
+
+double MonkeyFilterPolicy::optimal_false_positive_rate(size_t curr_level) {
+  int T = this->size_ratio_;
+  double front = std::pow(T, ((double)T / ((double)T - 1))) /
+                 std::pow(T, this->levels_ + 1 - curr_level);
+
+  return front * std::pow(EULER, -1 * this->default_bpe * LOG2SQUARED);
+}
+
+FilterBitsBuilder* MonkeyFilterPolicy::GetBuilderWithContext(
+    const FilterBuildingContext& context) const {
+  if (context.level_at_creation >= (int)this->policy_per_level.size()) {
+    return this->default_policy->GetBuilderWithContext(context);
+  }
+  return this->policy_per_level[context.level_at_creation]
+      ->GetBuilderWithContext(context);
+}
+
+std::string MonkeyFilterPolicy::GetId() const {
+  return BloomLikeFilterPolicy::GetId() + ":" +
+         std::to_string(this->default_bpe);
+}
+
 }  // namespace ROCKSDB_NAMESPACE

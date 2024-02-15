@@ -32,6 +32,9 @@
 #include "rocksdb/status.h"
 #include "rocksdb/types.h"
 
+#define EULER 2.71828182845904523536
+#define LOG2SQUARED 0.48045301391
+
 namespace ROCKSDB_NAMESPACE {
 
 class Slice;
@@ -208,5 +211,8 @@ const FilterPolicy* NewBloomFilterPolicy(
 // memory.
 FilterPolicy* NewRibbonFilterPolicy(double bloom_equivalent_bits_per_key,
                                     int bloom_before_level = 0);
+
+FilterPolicy* NewMonkeyFilterPolicy(double bits_per_key, int size_ratio,
+                                    size_t levels);
 
 }  // namespace ROCKSDB_NAMESPACE

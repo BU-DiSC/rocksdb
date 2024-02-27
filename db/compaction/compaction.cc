@@ -20,9 +20,13 @@
 #include "test_util/sync_point.h"
 #include "util/string_util.h"
 
+// for sortedness
+#include "sortedness/env.h"
+#include "sortedness/stats.h"
+
 namespace ROCKSDB_NAMESPACE {
 
-int sstableKeyCompare(const Comparator* uc, const Slice& a, const Slice& b) {
+int sstableKeyCompare(const Comparator *uc, const Slice &a, const Slice &b) {
   auto c = uc->CompareWithoutTimestamp(ExtractUserKey(a), ExtractUserKey(b));
   if (c != 0) {
     return c;
@@ -39,23 +43,23 @@ int sstableKeyCompare(const Comparator* uc, const Slice& a, const Slice& b) {
   return 0;
 }
 
-int sstableKeyCompare(const Comparator* user_cmp, const InternalKey* a,
-                      const InternalKey& b) {
+int sstableKeyCompare(const Comparator *user_cmp, const InternalKey *a,
+                      const InternalKey &b) {
   if (a == nullptr) {
     return -1;
   }
   return sstableKeyCompare(user_cmp, *a, b);
 }
 
-int sstableKeyCompare(const Comparator* user_cmp, const InternalKey& a,
-                      const InternalKey* b) {
+int sstableKeyCompare(const Comparator *user_cmp, const InternalKey &a,
+                      const InternalKey *b) {
   if (b == nullptr) {
     return -1;
   }
   return sstableKeyCompare(user_cmp, a, *b);
 }
 
-uint64_t TotalFileSize(const std::vector<FileMetaData*>& files) {
+uint64_t TotalFileSize(const std::vector<FileMetaData *> &files) {
   uint64_t sum = 0;
   for (size_t i = 0; i < files.size() && files[i]; i++) {
     sum += files[i]->fd.GetFileSize();
@@ -63,7 +67,7 @@ uint64_t TotalFileSize(const std::vector<FileMetaData*>& files) {
   return sum;
 }
 
-void Compaction::SetInputVersion(Version* _input_version) {
+void Compaction::SetInputVersion(Version *_input_version) {
   input_version_ = _input_version;
   cfd_ = input_version_->cfd();
 
@@ -73,24 +77,24 @@ void Compaction::SetInputVersion(Version* _input_version) {
 }
 
 void Compaction::GetBoundaryKeys(
-    VersionStorageInfo* vstorage,
-    const std::vector<CompactionInputFiles>& inputs, Slice* smallest_user_key,
-    Slice* largest_user_key, int exclude_level) {
+    VersionStorageInfo *vstorage,
+    const std::vector<CompactionInputFiles> &inputs, Slice *smallest_user_key,
+    Slice *largest_user_key, int exclude_level) {
   bool initialized = false;
-  const Comparator* ucmp = vstorage->InternalComparator()->user_comparator();
+  const Comparator *ucmp = vstorage->InternalComparator()->user_comparator();
   for (size_t i = 0; i < inputs.size(); ++i) {
     if (inputs[i].files.empty() || inputs[i].level == exclude_level) {
       continue;
     }
     if (inputs[i].level == 0) {
       // we need to consider all files on level 0
-      for (const auto* f : inputs[i].files) {
-        const Slice& start_user_key = f->smallest.user_key();
+      for (const auto *f : inputs[i].files) {
+        const Slice &start_user_key = f->smallest.user_key();
         if (!initialized ||
             ucmp->Compare(start_user_key, *smallest_user_key) < 0) {
           *smallest_user_key = start_user_key;
         }
-        const Slice& end_user_key = f->largest.user_key();
+        const Slice &end_user_key = f->largest.user_key();
         if (!initialized ||
             ucmp->Compare(end_user_key, *largest_user_key) > 0) {
           *largest_user_key = end_user_key;
@@ -99,12 +103,12 @@ void Compaction::GetBoundaryKeys(
       }
     } else {
       // we only need to consider the first and last file
-      const Slice& start_user_key = inputs[i].files[0]->smallest.user_key();
+      const Slice &start_user_key = inputs[i].files[0]->smallest.user_key();
       if (!initialized ||
           ucmp->Compare(start_user_key, *smallest_user_key) < 0) {
         *smallest_user_key = start_user_key;
       }
-      const Slice& end_user_key = inputs[i].files.back()->largest.user_key();
+      const Slice &end_user_key = inputs[i].files.back()->largest.user_key();
       if (!initialized || ucmp->Compare(end_user_key, *largest_user_key) > 0) {
         *largest_user_key = end_user_key;
       }
@@ -114,18 +118,18 @@ void Compaction::GetBoundaryKeys(
 }
 
 void Compaction::GetBoundaryInternalKeys(
-    VersionStorageInfo* vstorage,
-    const std::vector<CompactionInputFiles>& inputs, InternalKey* smallest_key,
-    InternalKey* largest_key, int exclude_level) {
+    VersionStorageInfo *vstorage,
+    const std::vector<CompactionInputFiles> &inputs, InternalKey *smallest_key,
+    InternalKey *largest_key, int exclude_level) {
   bool initialized = false;
-  const InternalKeyComparator* icmp = vstorage->InternalComparator();
+  const InternalKeyComparator *icmp = vstorage->InternalComparator();
   for (size_t i = 0; i < inputs.size(); ++i) {
     if (inputs[i].files.empty() || inputs[i].level == exclude_level) {
       continue;
     }
     if (inputs[i].level == 0) {
       // we need to consider all files on level 0
-      for (const auto* f : inputs[i].files) {
+      for (const auto *f : inputs[i].files) {
         if (!initialized || icmp->Compare(f->smallest, *smallest_key) < 0) {
           *smallest_key = f->smallest;
         }
@@ -150,8 +154,8 @@ void Compaction::GetBoundaryInternalKeys(
 }
 
 std::vector<CompactionInputFiles> Compaction::PopulateWithAtomicBoundaries(
-    VersionStorageInfo* vstorage, std::vector<CompactionInputFiles> inputs) {
-  const Comparator* ucmp = vstorage->InternalComparator()->user_comparator();
+    VersionStorageInfo *vstorage, std::vector<CompactionInputFiles> inputs) {
+  const Comparator *ucmp = vstorage->InternalComparator()->user_comparator();
   for (size_t i = 0; i < inputs.size(); i++) {
     if (inputs[i].level == 0 || inputs[i].files.empty()) {
       continue;
@@ -160,14 +164,15 @@ std::vector<CompactionInputFiles> Compaction::PopulateWithAtomicBoundaries(
     AtomicCompactionUnitBoundary cur_boundary;
     size_t first_atomic_idx = 0;
     auto add_unit_boundary = [&](size_t to) {
-      if (first_atomic_idx == to) return;
+      if (first_atomic_idx == to)
+        return;
       for (size_t k = first_atomic_idx; k < to; k++) {
         inputs[i].atomic_compaction_unit_boundaries.push_back(cur_boundary);
       }
       first_atomic_idx = to;
     };
     for (size_t j = 0; j < inputs[i].files.size(); j++) {
-      const auto* f = inputs[i].files[j];
+      const auto *f = inputs[i].files[j];
       if (j == 0) {
         // First file in a level.
         cur_boundary.smallest = &f->smallest;
@@ -195,12 +200,12 @@ std::vector<CompactionInputFiles> Compaction::PopulateWithAtomicBoundaries(
 // helper function to determine if compaction is creating files at the
 // bottommost level
 bool Compaction::IsBottommostLevel(
-    int output_level, VersionStorageInfo* vstorage,
-    const std::vector<CompactionInputFiles>& inputs) {
+    int output_level, VersionStorageInfo *vstorage,
+    const std::vector<CompactionInputFiles> &inputs) {
   int output_l0_idx;
   if (output_level == 0) {
     output_l0_idx = 0;
-    for (const auto* file : vstorage->LevelFiles(0)) {
+    for (const auto *file : vstorage->LevelFiles(0)) {
       if (inputs[0].files.back() == file) {
         break;
       }
@@ -219,14 +224,14 @@ bool Compaction::IsBottommostLevel(
 // test function to validate the functionality of IsBottommostLevel()
 // function -- determines if compaction with inputs and storage is bottommost
 bool Compaction::TEST_IsBottommostLevel(
-    int output_level, VersionStorageInfo* vstorage,
-    const std::vector<CompactionInputFiles>& inputs) {
+    int output_level, VersionStorageInfo *vstorage,
+    const std::vector<CompactionInputFiles> &inputs) {
   return IsBottommostLevel(output_level, vstorage, inputs);
 }
 
 bool Compaction::IsFullCompaction(
-    VersionStorageInfo* vstorage,
-    const std::vector<CompactionInputFiles>& inputs) {
+    VersionStorageInfo *vstorage,
+    const std::vector<CompactionInputFiles> &inputs) {
   size_t num_files_in_compaction = 0;
   size_t total_num_files = 0;
   for (int l = 0; l < vstorage->num_levels(); l++) {
@@ -247,7 +252,7 @@ Status Compaction::InitInputTableProperties() {
   const ReadOptions read_options(Env::IOActivity::kCompaction);
   assert(input_version_);
   for (size_t i = 0; i < num_input_levels(); ++i) {
-    for (const FileMetaData* fmd : *(this->inputs(i))) {
+    for (const FileMetaData *fmd : *(this->inputs(i))) {
       std::shared_ptr<const TableProperties> tp;
       std::string file_name =
           TableFileName(immutable_options_.cf_paths, fmd->fd.GetNumber(),
@@ -271,39 +276,33 @@ Status Compaction::InitInputTableProperties() {
 }
 
 Compaction::Compaction(
-    VersionStorageInfo* vstorage, const ImmutableOptions& _immutable_options,
-    const MutableCFOptions& _mutable_cf_options,
-    const MutableDBOptions& _mutable_db_options,
+    VersionStorageInfo *vstorage, const ImmutableOptions &_immutable_options,
+    const MutableCFOptions &_mutable_cf_options,
+    const MutableDBOptions &_mutable_db_options,
     std::vector<CompactionInputFiles> _inputs, int _output_level,
     uint64_t _target_file_size, uint64_t _max_compaction_bytes,
     uint32_t _output_path_id, CompressionType _compression,
     CompressionOptions _compression_opts, Temperature _output_temperature,
-    uint32_t _max_subcompactions, std::vector<FileMetaData*> _grandparents,
-    bool _manual_compaction, const std::string& _trim_ts, double _score,
+    uint32_t _max_subcompactions, std::vector<FileMetaData *> _grandparents,
+    bool _manual_compaction, const std::string &_trim_ts, double _score,
     bool _deletion_compaction, bool l0_files_might_overlap,
     CompactionReason _compaction_reason,
     BlobGarbageCollectionPolicy _blob_garbage_collection_policy,
     double _blob_garbage_collection_age_cutoff)
-    : input_vstorage_(vstorage),
-      start_level_(_inputs[0].level),
-      output_level_(_output_level),
-      target_output_file_size_(_target_file_size),
+    : input_vstorage_(vstorage), start_level_(_inputs[0].level),
+      output_level_(_output_level), target_output_file_size_(_target_file_size),
       max_compaction_bytes_(_max_compaction_bytes),
       max_subcompactions_(_max_subcompactions),
       immutable_options_(_immutable_options),
-      mutable_cf_options_(_mutable_cf_options),
-      input_version_(nullptr),
-      number_levels_(vstorage->num_levels()),
-      cfd_(nullptr),
-      output_path_id_(_output_path_id),
-      output_compression_(_compression),
+      mutable_cf_options_(_mutable_cf_options), input_version_(nullptr),
+      number_levels_(vstorage->num_levels()), cfd_(nullptr),
+      output_path_id_(_output_path_id), output_compression_(_compression),
       output_compression_opts_(_compression_opts),
       output_temperature_(_output_temperature),
       deletion_compaction_(_deletion_compaction),
       l0_files_might_overlap_(l0_files_might_overlap),
       inputs_(PopulateWithAtomicBoundaries(vstorage, std::move(_inputs))),
-      grandparents_(std::move(_grandparents)),
-      score_(_score),
+      grandparents_(std::move(_grandparents)), score_(_score),
       bottommost_level_(
           // For simplicity, we don't support the concept of "bottommost level"
           // with
@@ -314,10 +313,8 @@ Compaction::Compaction(
               ? false
               : IsBottommostLevel(output_level_, vstorage, inputs_)),
       is_full_compaction_(IsFullCompaction(vstorage, inputs_)),
-      is_manual_compaction_(_manual_compaction),
-      trim_ts_(_trim_ts),
-      is_trivial_move_(false),
-      compaction_reason_(_compaction_reason),
+      is_manual_compaction_(_manual_compaction), trim_ts_(_trim_ts),
+      is_trivial_move_(false), compaction_reason_(_compaction_reason),
       notify_on_compaction_completion_(false),
       enable_blob_garbage_collection_(
           _blob_garbage_collection_policy == BlobGarbageCollectionPolicy::kForce
@@ -376,10 +373,10 @@ Compaction::Compaction(
   output_split_key_ = nullptr;
   if (immutable_options_.compaction_style == kCompactionStyleLevel &&
       immutable_options_.compaction_pri == kRoundRobin) {
-    const InternalKey* cursor =
+    const InternalKey *cursor =
         &input_vstorage_->GetCompactCursors()[output_level_];
     if (cursor->size() != 0) {
-      const Slice& cursor_user_key = ExtractUserKey(cursor->Encode());
+      const Slice &cursor_user_key = ExtractUserKey(cursor->Encode());
       auto ucmp = vstorage->InternalComparator()->user_comparator();
       // May split output files according to the cursor if it in the user-key
       // range
@@ -412,15 +409,15 @@ void Compaction::PopulatePenultimateLevelOutputRange() {
     exclude_level = kInvalidLevel;
     penultimate_output_range_type_ = PenultimateOutputRangeType::kFullRange;
     std::set<uint64_t> penultimate_inputs;
-    for (const auto& input_lvl : inputs_) {
+    for (const auto &input_lvl : inputs_) {
       if (input_lvl.level == penultimate_level_) {
-        for (const auto& file : input_lvl.files) {
+        for (const auto &file : input_lvl.files) {
           penultimate_inputs.emplace(file->fd.GetNumber());
         }
       }
     }
     auto penultimate_files = input_vstorage_->LevelFiles(penultimate_level_);
-    for (const auto& file : penultimate_files) {
+    for (const auto &file : penultimate_files) {
       if (penultimate_inputs.find(file->fd.GetNumber()) ==
           penultimate_inputs.end()) {
         exclude_level = number_levels_ - 1;
@@ -459,7 +456,7 @@ int Compaction::GetPenultimateLevel() const { return penultimate_level_; }
 // smallest_key and largest_key include timestamps if user-defined timestamp is
 // enabled.
 bool Compaction::OverlapPenultimateLevelOutputRange(
-    const Slice& smallest_key, const Slice& largest_key) const {
+    const Slice &smallest_key, const Slice &largest_key) const {
   if (!SupportsPerKeyPlacement()) {
     return false;
   }
@@ -471,7 +468,7 @@ bool Compaction::OverlapPenultimateLevelOutputRange(
     return false;
   }
 
-  const Comparator* ucmp =
+  const Comparator *ucmp =
       input_vstorage_->InternalComparator()->user_comparator();
 
   return ucmp->CompareWithoutTimestamp(
@@ -482,7 +479,7 @@ bool Compaction::OverlapPenultimateLevelOutputRange(
 
 // key includes timestamp if user-defined timestamp is enabled.
 bool Compaction::WithinPenultimateLevelOutputRange(
-    const ParsedInternalKey& ikey) const {
+    const ParsedInternalKey &ikey) const {
   if (!SupportsPerKeyPlacement()) {
     return false;
   }
@@ -492,7 +489,7 @@ bool Compaction::WithinPenultimateLevelOutputRange(
     return false;
   }
 
-  const InternalKeyComparator* icmp = input_vstorage_->InternalComparator();
+  const InternalKeyComparator *icmp = input_vstorage_->InternalComparator();
 
   // op_type of a key can change during compaction, e.g. Merge -> Put.
   return icmp->CompareKeySeq(ikey, penultimate_level_smallest_.Encode()) >= 0 &&
@@ -564,8 +561,8 @@ bool Compaction::IsTrivialMove() const {
 
   if (output_level_ + 1 < number_levels_) {
     std::unique_ptr<SstPartitioner> partitioner = CreateSstPartitioner();
-    for (const auto& file : inputs_.front().files) {
-      std::vector<FileMetaData*> file_grand_parents;
+    for (const auto &file : inputs_.front().files) {
+      std::vector<FileMetaData *> file_grand_parents;
       input_vstorage_->GetOverlappingInputs(output_level_ + 1, &file->smallest,
                                             &file->largest,
                                             &file_grand_parents);
@@ -592,16 +589,21 @@ bool Compaction::IsTrivialMove() const {
   return true;
 }
 
-void Compaction::AddInputDeletions(VersionEdit* out_edit) {
+void Compaction::AddInputDeletions(VersionEdit *out_edit) {
+  // proj_sortedness:
+  // collect stats
+  Stats *statistics = Stats::getInstance();
   for (size_t which = 0; which < num_input_levels(); which++) {
     for (size_t i = 0; i < inputs_[which].size(); i++) {
       out_edit->DeleteFile(level(which), inputs_[which][i]->fd.GetNumber());
     }
   }
+  // proj_sortedness:
+  statistics->compaction_count++;
 }
 
 bool Compaction::KeyNotExistsBeyondOutputLevel(
-    const Slice& user_key, std::vector<size_t>* level_ptrs) const {
+    const Slice &user_key, std::vector<size_t> *level_ptrs) const {
   assert(input_version_ != nullptr);
   assert(level_ptrs != nullptr);
   assert(level_ptrs->size() == static_cast<size_t>(number_levels_));
@@ -610,12 +612,12 @@ bool Compaction::KeyNotExistsBeyondOutputLevel(
   } else if (output_level_ != 0 &&
              cfd_->ioptions()->compaction_style == kCompactionStyleLevel) {
     // Maybe use binary search to find right entry instead of linear search?
-    const Comparator* user_cmp = cfd_->user_comparator();
+    const Comparator *user_cmp = cfd_->user_comparator();
     for (int lvl = output_level_ + 1; lvl < number_levels_; lvl++) {
-      const std::vector<FileMetaData*>& files =
+      const std::vector<FileMetaData *> &files =
           input_vstorage_->LevelFiles(lvl);
       for (; level_ptrs->at(lvl) < files.size(); level_ptrs->at(lvl)++) {
-        auto* f = files[level_ptrs->at(lvl)];
+        auto *f = files[level_ptrs->at(lvl)];
         if (user_cmp->Compare(user_key, f->largest.user_key()) <= 0) {
           // We've advanced far enough
           // In the presence of user-defined timestamp, we may need to handle
@@ -639,8 +641,8 @@ bool Compaction::KeyNotExistsBeyondOutputLevel(
 }
 
 bool Compaction::KeyRangeNotExistsBeyondOutputLevel(
-    const Slice& begin_key, const Slice& end_key,
-    std::vector<size_t>* level_ptrs) const {
+    const Slice &begin_key, const Slice &end_key,
+    std::vector<size_t> *level_ptrs) const {
   assert(input_version_ != nullptr);
   assert(level_ptrs != nullptr);
   assert(level_ptrs->size() == static_cast<size_t>(number_levels_));
@@ -650,12 +652,12 @@ bool Compaction::KeyRangeNotExistsBeyondOutputLevel(
     return true /* does not overlap */;
   } else if (output_level_ != 0 &&
              cfd_->ioptions()->compaction_style == kCompactionStyleLevel) {
-    const Comparator* user_cmp = cfd_->user_comparator();
+    const Comparator *user_cmp = cfd_->user_comparator();
     for (int lvl = output_level_ + 1; lvl < number_levels_; lvl++) {
-      const std::vector<FileMetaData*>& files =
+      const std::vector<FileMetaData *> &files =
           input_vstorage_->LevelFiles(lvl);
       for (; level_ptrs->at(lvl) < files.size(); level_ptrs->at(lvl)++) {
-        auto* f = files[level_ptrs->at(lvl)];
+        auto *f = files[level_ptrs->at(lvl)];
         // Advance until the first file with begin_key <= f->largest.user_key()
         if (user_cmp->CompareWithoutTimestamp(begin_key,
                                               f->largest.user_key()) > 0) {
@@ -695,11 +697,11 @@ void Compaction::MarkFilesBeingCompacted(bool mark_as_compacted) {
 // Sample output:
 // If compacting 3 L0 files, 2 L3 files and 1 L4 file, and outputting to L5,
 // print: "3@0 + 2@3 + 1@4 files to L5"
-const char* Compaction::InputLevelSummary(
-    InputLevelSummaryBuffer* scratch) const {
+const char *
+Compaction::InputLevelSummary(InputLevelSummaryBuffer *scratch) const {
   int len = 0;
   bool is_first = true;
-  for (auto& input_level : inputs_) {
+  for (auto &input_level : inputs_) {
     if (input_level.empty()) {
       continue;
     }
@@ -723,7 +725,7 @@ const char* Compaction::InputLevelSummary(
 
 uint64_t Compaction::CalculateTotalInputSize() const {
   uint64_t size = 0;
-  for (auto& input_level : inputs_) {
+  for (auto &input_level : inputs_) {
     for (auto f : input_level.files) {
       size += f->fd.GetFileSize();
     }
@@ -742,7 +744,7 @@ void Compaction::ResetNextCompactionIndex() {
 }
 
 namespace {
-int InputSummary(const std::vector<FileMetaData*>& files, char* output,
+int InputSummary(const std::vector<FileMetaData *> &files, char *output,
                  int len) {
   *output = '\0';
   int write = 0;
@@ -753,15 +755,16 @@ int InputSummary(const std::vector<FileMetaData*>& files, char* output,
     AppendHumanBytes(files.at(i)->fd.GetFileSize(), sztxt, 16);
     ret = snprintf(output + write, sz, "%" PRIu64 "(%s) ",
                    files.at(i)->fd.GetNumber(), sztxt);
-    if (ret < 0 || ret >= sz) break;
+    if (ret < 0 || ret >= sz)
+      break;
     write += ret;
   }
   // if files.size() is non-zero, overwrite the last space
   return write - !!files.size();
 }
-}  // namespace
+} // namespace
 
-void Compaction::Summary(char* output, int len) {
+void Compaction::Summary(char *output, int len) {
   int write =
       snprintf(output, len, "Base version %" PRIu64 " Base level %d, inputs: [",
                input_version_->GetVersionNumber(), start_level_);
@@ -789,8 +792,8 @@ void Compaction::Summary(char* output, int len) {
 uint64_t Compaction::OutputFilePreallocationSize() const {
   uint64_t preallocation_size = 0;
 
-  for (const auto& level_files : inputs_) {
-    for (const auto& file : level_files.files) {
+  for (const auto &level_files : inputs_) {
+    for (const auto &file : level_files.files) {
       preallocation_size += file->fd.GetFileSize();
     }
   }
@@ -883,7 +886,7 @@ bool Compaction::ShouldFormSubcompactions() const {
 bool Compaction::DoesInputReferenceBlobFiles() const {
   assert(input_version_);
 
-  const VersionStorageInfo* storage_info = input_version_->storage_info();
+  const VersionStorageInfo *storage_info = input_version_->storage_info();
   assert(storage_info);
 
   if (storage_info->GetBlobFiles().empty()) {
@@ -891,7 +894,7 @@ bool Compaction::DoesInputReferenceBlobFiles() const {
   }
 
   for (size_t i = 0; i < inputs_.size(); ++i) {
-    for (const FileMetaData* meta : inputs_[i].files) {
+    for (const FileMetaData *meta : inputs_[i].files) {
       assert(meta);
 
       if (meta->oldest_blob_file_number != kInvalidBlobFileNumber) {
@@ -903,13 +906,14 @@ bool Compaction::DoesInputReferenceBlobFiles() const {
   return false;
 }
 
-uint64_t Compaction::MinInputFileOldestAncesterTime(
-    const InternalKey* start, const InternalKey* end) const {
+uint64_t
+Compaction::MinInputFileOldestAncesterTime(const InternalKey *start,
+                                           const InternalKey *end) const {
   uint64_t min_oldest_ancester_time = std::numeric_limits<uint64_t>::max();
-  const InternalKeyComparator& icmp =
+  const InternalKeyComparator &icmp =
       column_family_data()->internal_comparator();
-  for (const auto& level_files : inputs_) {
-    for (const auto& file : level_files.files) {
+  for (const auto &level_files : inputs_) {
+    for (const auto &file : level_files.files) {
       if (start != nullptr && icmp.Compare(file->largest, *start) < 0) {
         continue;
       }
@@ -928,8 +932,8 @@ uint64_t Compaction::MinInputFileOldestAncesterTime(
 
 uint64_t Compaction::MinInputFileEpochNumber() const {
   uint64_t min_epoch_number = std::numeric_limits<uint64_t>::max();
-  for (const auto& inputs_per_level : inputs_) {
-    for (const auto& file : inputs_per_level.files) {
+  for (const auto &inputs_per_level : inputs_) {
+    for (const auto &file : inputs_per_level.files) {
       min_epoch_number = std::min(min_epoch_number, file->epoch_number);
     }
   }
@@ -937,8 +941,8 @@ uint64_t Compaction::MinInputFileEpochNumber() const {
 }
 
 int Compaction::EvaluatePenultimateLevel(
-    const VersionStorageInfo* vstorage,
-    const ImmutableOptions& immutable_options, const int start_level,
+    const VersionStorageInfo *vstorage,
+    const ImmutableOptions &immutable_options, const int start_level,
     const int output_level) {
   // TODO: currently per_key_placement feature only support level and universal
   //  compaction
@@ -981,4 +985,4 @@ int Compaction::EvaluatePenultimateLevel(
   return penultimate_level;
 }
 
-}  // namespace ROCKSDB_NAMESPACE
+} // namespace ROCKSDB_NAMESPACE

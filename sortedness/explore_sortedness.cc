@@ -1,4 +1,5 @@
 #include <cassert>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <random>
@@ -367,14 +368,14 @@ void configOptions(EmuEnv *_env, Options *op, BlockBasedTableOptions *table_op,
   op->statistics->set_stats_level(StatsLevel::kExceptHistogramOrTimers);
 }
 
-int performIngestions(DB *&db, vector<int> data, const WriteOptions *write_op,
-                      const ReadOptions *read_op, bool show_progress,
-                      long value_size) {
+int performIngestions(DB *&db, vector<unsigned long> data,
+                      const WriteOptions *write_op, const ReadOptions *read_op,
+                      bool show_progress, long value_size) {
   if (show_progress) cout << "Inserts\t";
 
   uint64_t progress_counter = 0;
   int n = experiment_stats.num_to_be_inserted;
-  cout<<"n = "<<n;
+  cout << "n = " << n << std::endl;
   progressbar bar(n);
   bar.set_todo_char(" ");
   bar.set_done_char("█");
@@ -395,7 +396,7 @@ int performIngestions(DB *&db, vector<int> data, const WriteOptions *write_op,
   cout << "Width = " << width << endl;
   cout << "Value size = " << value_size << endl;
   for (int i = 0; i < n; i++) {
-    int intKey = data[i] + 1;
+    unsigned long intKey = data[i] + 1;
     std::stringstream ss;
     ss << std::setw(width) << std::setfill('0') << intKey;
     arr.push_back(ss.str());
@@ -404,7 +405,7 @@ int performIngestions(DB *&db, vector<int> data, const WriteOptions *write_op,
     values.push_back(generateValue(value_size));
   }
 
-  cout << "arr size" << arr.size();
+  cout << "arr.size() = " << arr.size() << std::endl;
 
   std::cout << "==============================================================="
             << std::endl;
@@ -499,7 +500,8 @@ int performIngestions(DB *&db, vector<int> data, const WriteOptions *write_op,
   return 1;
 }
 
-int performPointLookups(DB *&db, vector<int> data, bool show_progress) {
+int performPointLookups(DB *&db, vector<unsigned long> data,
+                        bool show_progress) {
   if (show_progress) cout << "Point lookups\t";
   int tot_inserts = experiment_stats.num_inserts;
   progressbar bar(experiment_stats.num_to_lookup);
@@ -656,7 +658,7 @@ void PrintStats(DB *db, const char *key, bool print_header = false) {
   fprintf(stdout, "\n%s\n", stats.c_str());
 }
 
-int runExperiments(EmuEnv *_env, vector<int> data) {
+int runExperiments(EmuEnv *_env, vector<unsigned long> data) {
   DB *db;
   Options options;
   WriteOptions write_options;
@@ -673,7 +675,7 @@ int runExperiments(EmuEnv *_env, vector<int> data) {
 
   if (_env->destroy) {
     // DestroyDB(kDBPath, options);
-    cout << "hi " << endl;
+    cout << "bye " << endl;
     DestroyDB(_env->path, options);
   }
 
@@ -716,7 +718,7 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  std::vector<int> data;
+  std::vector<unsigned long> data;
   long int size = 0;
 
   Stats *instance = Stats::getInstance();
@@ -724,7 +726,7 @@ int main(int argc, char *argv[]) {
   // check type of inserts - either from file or uni_rand
   int num;
   if (_env->uni_rand_inserts) {
-    cout<<"uni rand"<<endl;
+    cout << "uni rand" << endl;
     num = _env->num_inserts;
     cout << "Number of inserts to perform = " << num << endl;
     cout << "Performing uniformly random inserts...." << endl;
@@ -764,20 +766,37 @@ int main(int argc, char *argv[]) {
 
     // num = size / sizeof(int);
 
-    
-    std::string line;
-    std::ifstream ifs;
-    ifs.open(_env->ingestion_path);
-    while (std::getline(ifs, line)) {
-      int key = std::stoi(line);
-      data.push_back(key);
-    }
-    ifs.close();
+    // std::string line;
+    // std::ifstream ifs;
+    // ifs.open(_env->ingestion_path);
+    // while (std::getline(ifs, line)) {
+    //   int key = std::stoi(line);
+    //   data.push_back(key);
+    // }
+    // ifs.close();
+    //
+    // num = data.size();
 
+    std::ifstream fid(_env->ingestion_path, std::ios::binary);
+    if (!fid.is_open()) {
+      std::cerr << "Error opening file " << _env->ingestion_path << std::endl;
+      exit(EXIT_FAILURE);
+    }
+
+    fid.seekg(0, std::ios::end);
+    std::streampos fileSize = fid.tellg();
+    fid.seekg(0, std::ios::beg);
+    data.resize(fileSize / sizeof(unsigned long));
+    fid.read(reinterpret_cast<char *>(data.data()), fileSize);
+    fid.close();
     num = data.size();
+
     cout << "num = " << num << endl;
+    for (auto idx = 0; idx < 10; idx++) {
+      cout << "data.at(" << idx << ") = " << data.at(idx) << std::endl;
+    }
   }
-  cout<<"data size = "<<data.size()<<endl;
+  cout << "data size = " << data.size() << endl;
   cout << "Number of inserts = " << num << endl;
 
   experiment_stats.num_to_be_inserted = num;
@@ -931,7 +950,7 @@ int parse_arguments2(int argc, char *argv[], EmuEnv *_env) {
                                ? args::get(compaction_style_cmd)
                                : _env->compaction_style;
 
-  cout << "Compaction style = " << _env->compaction_style;
+  cout << "Compaction style = " << _env->compaction_style << std::endl;
 
   _env->uni_rand_inserts = uni_rand_inserts_cmd ? true : false;
 

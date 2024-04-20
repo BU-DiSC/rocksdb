@@ -406,6 +406,14 @@ Status WriteBatchWithIndex::Delete(ColumnFamilyHandle* column_family,
   return Status::NotSupported();
 }
 
+Status WriteBatchWithIndex::Delete(ColumnFamilyHandle* column_family,
+                                   const Slice& /*key*/, uint64_t /*dpt*/) {
+  if (!column_family) {
+    return Status::InvalidArgument("column family handle cannot be nullptr");
+  }
+  return Status::NotSupported();
+}
+
 Status WriteBatchWithIndex::SingleDelete(ColumnFamilyHandle* column_family,
                                          const Slice& key) {
   rep->SetLastEntryOffset();

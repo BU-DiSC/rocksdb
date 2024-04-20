@@ -1165,6 +1165,15 @@ Status WriteBatch::Delete(ColumnFamilyHandle* column_family, const Slice& key,
                                     SliceParts(key_with_ts.data(), 2));
 }
 
+Status WriteBatch::Delete(ColumnFamilyHandle* column_family, const Slice& key,
+                          const uint64_t dpt) {
+  uint32_t cf_id = column_family->GetID();
+  std::string dpt_hex = (boost::format("%x") % dpt).str();
+  std::array<Slice, 2> key_with_dpt{{key, dpt_hex}};
+  return WriteBatchInternal::Delete(this, cf_id,
+                                    SliceParts(key_with_dpt.data(), 2));
+}
+
 Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
                                   const SliceParts& key) {
   LocalSavePoint save(b);

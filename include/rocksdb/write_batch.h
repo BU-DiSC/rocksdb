@@ -132,6 +132,8 @@ class WriteBatch : public WriteBatchBase {
   Status Delete(const Slice& key) override { return Delete(nullptr, key); }
   Status Delete(ColumnFamilyHandle* column_family, const Slice& key,
                 const Slice& ts) override;
+  Status Delete(ColumnFamilyHandle* column_family, const Slice& key,
+                const uint64_t dpt) override;
 
   // variant that takes SliceParts
   // These two variants of Delete(..., const SliceParts& key) can be used when

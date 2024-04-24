@@ -87,6 +87,8 @@ class WriteBatchBase {
   virtual Status Delete(const Slice& key) = 0;
   virtual Status Delete(ColumnFamilyHandle* column_family, const Slice& key,
                         const Slice& ts) = 0;
+  virtual Status Delete(ColumnFamilyHandle* column_family, const Slice& key,
+                        const uint64_t dpt) = 0;
 
   // variant that takes SliceParts
   virtual Status Delete(ColumnFamilyHandle* column_family,

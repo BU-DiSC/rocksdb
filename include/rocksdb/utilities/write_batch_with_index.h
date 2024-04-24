@@ -149,6 +149,8 @@ class WriteBatchWithIndex : public WriteBatchBase {
   Status Delete(const Slice& key) override;
   Status Delete(ColumnFamilyHandle* column_family, const Slice& key,
                 const Slice& ts) override;
+  Status Delete(ColumnFamilyHandle* column_family, const Slice& key,
+                const uint64_t dpt) override;
 
   using WriteBatchBase::SingleDelete;
   Status SingleDelete(ColumnFamilyHandle* column_family,

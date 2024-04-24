@@ -572,14 +572,16 @@ TEST_P(FaultInjectionTest, NoDuplicateTrailingEntries) {
     edit.SetColumnFamily(0);
     std::string buf;
     assert(edit.EncodeTo(&buf));
-    const Status s = log_writer->AddRecord(buf);
+    const Status s = log_writer->AddRecord(WriteOptions(), buf);
     ASSERT_NOK(s);
   }
 
   fault_fs->DisableWriteErrorInjection();
 
-  // Closing the log writer will cause WritableFileWriter::Close() and flush
-  // remaining data from its buffer to underlying file.
+  // Flush remaining data from its buffer to underlying file.
+  ASSERT_OK(log_writer->file()->writable_file()->Sync(IOOptions(),
+                                                      nullptr /* dbg */));
+  // Closing the log writer will cause WritableFileWriter::Close()
   log_writer.reset();
 
   {

@@ -26,7 +26,7 @@ CompressedSecondaryCache::CompressedSecondaryCache(
               cache_))),
       disable_cache_(opts.capacity == 0) {}
 
-CompressedSecondaryCache::~CompressedSecondaryCache() {}
+CompressedSecondaryCache::~CompressedSecondaryCache() = default;
 
 std::unique_ptr<SecondaryCacheResultHandle> CompressedSecondaryCache::Lookup(
     const Slice& key, const Cache::CacheItemHelper* helper,
@@ -192,13 +192,13 @@ Status CompressedSecondaryCache::InsertInternal(
       type == kNoCompression &&
       !cache_options_.do_not_compress_roles.Contains(helper->role)) {
     PERF_COUNTER_ADD(compressed_sec_cache_uncompressed_bytes, data_size);
-    CompressionOptions compression_opts;
     CompressionContext compression_context(cache_options_.compression_type,
-                                           compression_opts);
+                                           cache_options_.compression_opts);
     uint64_t sample_for_compression{0};
     CompressionInfo compression_info(
-        compression_opts, compression_context, CompressionDict::GetEmptyDict(),
-        cache_options_.compression_type, sample_for_compression);
+        cache_options_.compression_opts, compression_context,
+        CompressionDict::GetEmptyDict(), cache_options_.compression_type,
+        sample_for_compression);
 
     bool success =
         CompressData(val, compression_info,
@@ -291,6 +291,11 @@ std::string CompressedSecondaryCache::GetPrintableOptions() const {
   snprintf(buffer, kBufferSize, "    compression_type : %s\n",
            CompressionTypeToString(cache_options_.compression_type).c_str());
   ret.append(buffer);
+  snprintf(buffer, kBufferSize, "    compression_opts : %s\n",
+           CompressionOptionsToString(
+               const_cast<CompressionOptions&>(cache_options_.compression_opts))
+               .c_str());
+  ret.append(buffer);
   snprintf(buffer, kBufferSize, "    compress_format_version : %d\n",
            cache_options_.compress_format_version);
   ret.append(buffer);
@@ -379,7 +384,7 @@ const Cache::CacheItemHelper* CompressedSecondaryCache::GetHelper(
             chunks_head = chunks_head->next;
             tmp_chunk->Free();
             obj = nullptr;
-          };
+          }
         }};
     return &kHelper;
   } else {

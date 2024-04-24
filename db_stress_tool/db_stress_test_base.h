@@ -206,14 +206,24 @@ class StressTest {
 
   Status TestPauseBackground(ThreadState* thread);
 
+  Status TestDisableFileDeletions(ThreadState* thread);
+
+  Status TestDisableManualCompaction(ThreadState* thread);
+
   void TestAcquireSnapshot(ThreadState* thread, int rand_column_family,
                            const std::string& keystr, uint64_t i);
 
   Status MaybeReleaseSnapshots(ThreadState* thread, uint64_t i);
+
   Status VerifyGetLiveFiles() const;
+  Status VerifyGetLiveFilesMetaData() const;
+  Status VerifyGetLiveFilesStorageInfo() const;
+  Status VerifyGetAllColumnFamilyMetaData() const;
+
   Status VerifyGetSortedWalFiles() const;
   Status VerifyGetCurrentWalFile() const;
   void TestGetProperty(ThreadState* thread) const;
+  Status TestGetPropertiesOfAllTables() const;
 
   virtual Status TestApproximateSize(
       ThreadState* thread, uint64_t iteration,
@@ -291,13 +301,13 @@ class StressTest {
 };
 
 // Load options from OPTIONS file and populate `options`.
-extern bool InitializeOptionsFromFile(Options& options);
+bool InitializeOptionsFromFile(Options& options);
 
 // Initialize `options` using command line arguments.
 // When this function is called, `cache`, `block_cache_compressed`,
 // `filter_policy` have all been initialized. Therefore, we just pass them as
 // input arguments.
-extern void InitializeOptionsFromFlags(
+void InitializeOptionsFromFlags(
     const std::shared_ptr<Cache>& cache,
     const std::shared_ptr<const FilterPolicy>& filter_policy, Options& options);
 
@@ -322,7 +332,7 @@ extern void InitializeOptionsFromFlags(
 //
 // InitializeOptionsGeneral() must not overwrite fields of `options` loaded
 // from OPTIONS file.
-extern void InitializeOptionsGeneral(
+void InitializeOptionsGeneral(
     const std::shared_ptr<Cache>& cache,
     const std::shared_ptr<const FilterPolicy>& filter_policy, Options& options);
 
@@ -330,7 +340,7 @@ extern void InitializeOptionsGeneral(
 // user-defined timestamp which requires `-user_timestamp_size=8`.
 // This function also checks for known (currently) incompatible features with
 // user-defined timestamp.
-extern void CheckAndSetOptionsForUserTimestamp(Options& options);
+void CheckAndSetOptionsForUserTimestamp(Options& options);
 
 }  // namespace ROCKSDB_NAMESPACE
 #endif  // GFLAGS

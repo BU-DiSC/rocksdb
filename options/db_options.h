@@ -61,7 +61,6 @@ struct ImmutableDBOptions {
   bool advise_random_on_open;
   size_t db_write_buffer_size;
   std::shared_ptr<WriteBufferManager> write_buffer_manager;
-  DBOptions::AccessHint access_hint_on_compaction_start;
   size_t random_access_max_buffer_size;
   bool use_adaptive_mutex;
   std::vector<std::shared_ptr<EventListener>> listeners;
@@ -105,6 +104,9 @@ struct ImmutableDBOptions {
   Logger* logger;
   std::shared_ptr<CompactionService> compaction_service;
   bool enforce_single_del_contracts;
+  uint64_t follower_refresh_catchup_period_ms;
+  uint64_t follower_catchup_retry_count;
+  uint64_t follower_catchup_retry_wait_ms;
 
   bool IsWalDirSameAsDBPath() const;
   bool IsWalDirSameAsDBPath(const std::string& path) const;

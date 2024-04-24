@@ -59,7 +59,7 @@ CuckooTableReader::CuckooTableReader(
   }
   {
     std::unique_ptr<TableProperties> props;
-    // TODO: plumb Env::IOActivity
+    // TODO: plumb Env::IOActivity, Env::IOPriority
     const ReadOptions read_options;
     status_ =
         ReadTableProperties(file_.get(), file_size, kCuckooTableMagicNumber,
@@ -186,7 +186,10 @@ Status CuckooTableReader::Get(const ReadOptions& /*readOptions*/,
             return s;
           }
           bool dont_care __attribute__((__unused__));
-          get_context->SaveValue(found_ikey, value, &dont_care);
+          get_context->SaveValue(found_ikey, value, &dont_care, &s);
+          if (!s.ok()) {
+            return s;
+          }
         }
         // We don't support merge operations. So, we return here.
         return Status::OK();

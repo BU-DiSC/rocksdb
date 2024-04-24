@@ -35,14 +35,9 @@ static std::unordered_map<std::string, WALRecoveryMode>
         {"kSkipAnyCorruptedRecords",
          WALRecoveryMode::kSkipAnyCorruptedRecords}};
 
-static std::unordered_map<std::string, DBOptions::AccessHint>
-    access_hint_string_map = {{"NONE", DBOptions::AccessHint::NONE},
-                              {"NORMAL", DBOptions::AccessHint::NORMAL},
-                              {"SEQUENTIAL", DBOptions::AccessHint::SEQUENTIAL},
-                              {"WILLNEED", DBOptions::AccessHint::WILLNEED}};
-
 static std::unordered_map<std::string, CacheTier> cache_tier_string_map = {
     {"kVolatileTier", CacheTier::kVolatileTier},
+    {"kVolatileCompressedTier", CacheTier::kVolatileCompressedTier},
     {"kNonVolatileBlockTier", CacheTier::kNonVolatileBlockTier}};
 
 static std::unordered_map<std::string, InfoLogLevel> info_log_level_string_map =
@@ -357,10 +352,8 @@ static std::unordered_map<std::string, OptionTypeInfo>
           OptionType::kUInt64T, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
         {"access_hint_on_compaction_start",
-         OptionTypeInfo::Enum<DBOptions::AccessHint>(
-             offsetof(struct ImmutableDBOptions,
-                      access_hint_on_compaction_start),
-             &access_hint_string_map)},
+         OptionTypeInfo::Enum<bool>(0, nullptr, OptionTypeFlags::kNone,
+                                    OptionVerificationType::kDeprecated)},
         {"info_log_level",
          OptionTypeInfo::Enum<InfoLogLevel>(
              offsetof(struct ImmutableDBOptions, info_log_level),
@@ -566,6 +559,19 @@ static std::unordered_map<std::string, OptionTypeInfo>
          {offsetof(struct ImmutableDBOptions, enforce_single_del_contracts),
           OptionType::kBoolean, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
+        {"follower_refresh_catchup_period_ms",
+         {offsetof(struct ImmutableDBOptions,
+                   follower_refresh_catchup_period_ms),
+          OptionType::kUInt64T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"follower_catchup_retry_count",
+         {offsetof(struct ImmutableDBOptions, follower_catchup_retry_count),
+          OptionType::kUInt64T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"follower_catchup_retry_wait_ms",
+         {offsetof(struct ImmutableDBOptions, follower_catchup_retry_wait_ms),
+          OptionType::kUInt64T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
 };
 
 const std::string OptionsHelper::kDBOptionsName = "DBOptions";
@@ -724,7 +730,6 @@ ImmutableDBOptions::ImmutableDBOptions(const DBOptions& options)
       advise_random_on_open(options.advise_random_on_open),
       db_write_buffer_size(options.db_write_buffer_size),
       write_buffer_manager(options.write_buffer_manager),
-      access_hint_on_compaction_start(options.access_hint_on_compaction_start),
       random_access_max_buffer_size(options.random_access_max_buffer_size),
       use_adaptive_mutex(options.use_adaptive_mutex),
       listeners(options.listeners),
@@ -764,7 +769,11 @@ ImmutableDBOptions::ImmutableDBOptions(const DBOptions& options)
       checksum_handoff_file_types(options.checksum_handoff_file_types),
       lowest_used_cache_tier(options.lowest_used_cache_tier),
       compaction_service(options.compaction_service),
-      enforce_single_del_contracts(options.enforce_single_del_contracts) {
+      enforce_single_del_contracts(options.enforce_single_del_contracts),
+      follower_refresh_catchup_period_ms(
+          options.follower_refresh_catchup_period_ms),
+      follower_catchup_retry_count(options.follower_catchup_retry_count),
+      follower_catchup_retry_wait_ms(options.follower_catchup_retry_wait_ms) {
   fs = env->GetFileSystem();
   clock = env->GetSystemClock().get();
   logger = info_log.get();
@@ -862,8 +871,6 @@ void ImmutableDBOptions::Dump(Logger* log) const {
       db_write_buffer_size);
   ROCKS_LOG_HEADER(log, "                   Options.write_buffer_manager: %p",
                    write_buffer_manager.get());
-  ROCKS_LOG_HEADER(log, "        Options.access_hint_on_compaction_start: %d",
-                   static_cast<int>(access_hint_on_compaction_start));
   ROCKS_LOG_HEADER(
       log, "          Options.random_access_max_buffer_size: %" ROCKSDB_PRIszt,
       random_access_max_buffer_size);

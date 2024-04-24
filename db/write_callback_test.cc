@@ -179,7 +179,8 @@ TEST_P(WriteCallbackPTest, WriteWithCallbackTest) {
     column_families.emplace_back(kDefaultColumnFamilyName, cf_options);
     std::vector<ColumnFamilyHandle*> handles;
     auto open_s = DBImpl::Open(db_options, dbname, column_families, &handles,
-                               &db, seq_per_batch_, true /* batch_per_txn */);
+                               &db, seq_per_batch_, true /* batch_per_txn */,
+                               false /* is_retry */, nullptr /* can_retry */);
     ASSERT_OK(open_s);
     assert(handles.size() == 1);
     delete handles[0];
@@ -220,7 +221,7 @@ TEST_P(WriteCallbackPTest, WriteWithCallbackTest) {
           is_last = (cur_threads_linked == write_group.size() - 1);
 
           // check my state
-          auto* writer = reinterpret_cast<WriteThread::Writer*>(arg);
+          auto* writer = static_cast<WriteThread::Writer*>(arg);
 
           if (is_leader) {
             ASSERT_TRUE(writer->state ==
@@ -250,7 +251,7 @@ TEST_P(WriteCallbackPTest, WriteWithCallbackTest) {
     ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
         "WriteThread::JoinBatchGroup:DoneWaiting", [&](void* arg) {
           // check my state
-          auto* writer = reinterpret_cast<WriteThread::Writer*>(arg);
+          auto* writer = static_cast<WriteThread::Writer*>(arg);
 
           if (!allow_batching_) {
             // no batching so everyone should be a leader

@@ -115,6 +115,7 @@ TEST_F(OptionsTest, GetOptionsFromMapTest) {
       {"memtable_huge_page_size", "28"},
       {"bloom_locality", "29"},
       {"max_successive_merges", "30"},
+      {"strict_max_successive_merges", "true"},
       {"min_partial_merge_operands", "31"},
       {"prefix_extractor", "fixed:31"},
       {"experimental_mempurge_threshold", "0.003"},
@@ -130,6 +131,7 @@ TEST_F(OptionsTest, GetOptionsFromMapTest) {
       {"blob_file_starting_level", "1"},
       {"prepopulate_blob_cache", "kDisable"},
       {"last_level_temperature", "kWarm"},
+      {"default_write_temperature", "kCold"},
       {"default_temperature", "kHot"},
       {"persist_user_defined_timestamps", "true"},
       {"memtable_max_range_deletions", "0"},
@@ -270,6 +272,7 @@ TEST_F(OptionsTest, GetOptionsFromMapTest) {
   ASSERT_EQ(new_cf_opt.memtable_huge_page_size, 28U);
   ASSERT_EQ(new_cf_opt.bloom_locality, 29U);
   ASSERT_EQ(new_cf_opt.max_successive_merges, 30U);
+  ASSERT_EQ(new_cf_opt.strict_max_successive_merges, true);
   ASSERT_TRUE(new_cf_opt.prefix_extractor != nullptr);
   ASSERT_EQ(new_cf_opt.optimize_filters_for_hits, true);
   ASSERT_EQ(new_cf_opt.prefix_extractor->AsString(), "rocksdb.FixedPrefix.31");
@@ -285,7 +288,7 @@ TEST_F(OptionsTest, GetOptionsFromMapTest) {
   ASSERT_EQ(new_cf_opt.blob_file_starting_level, 1);
   ASSERT_EQ(new_cf_opt.prepopulate_blob_cache, PrepopulateBlobCache::kDisable);
   ASSERT_EQ(new_cf_opt.last_level_temperature, Temperature::kWarm);
-  ASSERT_EQ(new_cf_opt.bottommost_temperature, Temperature::kWarm);
+  ASSERT_EQ(new_cf_opt.default_write_temperature, Temperature::kCold);
   ASSERT_EQ(new_cf_opt.default_temperature, Temperature::kHot);
   ASSERT_EQ(new_cf_opt.persist_user_defined_timestamps, true);
   ASSERT_EQ(new_cf_opt.memtable_max_range_deletions, 0);
@@ -2333,6 +2336,7 @@ TEST_F(OptionsOldApiTest, GetOptionsFromMapTest) {
       {"memtable_huge_page_size", "28"},
       {"bloom_locality", "29"},
       {"max_successive_merges", "30"},
+      {"strict_max_successive_merges", "true"},
       {"min_partial_merge_operands", "31"},
       {"prefix_extractor", "fixed:31"},
       {"experimental_mempurge_threshold", "0.003"},
@@ -2348,6 +2352,7 @@ TEST_F(OptionsOldApiTest, GetOptionsFromMapTest) {
       {"blob_file_starting_level", "1"},
       {"prepopulate_blob_cache", "kDisable"},
       {"last_level_temperature", "kWarm"},
+      {"default_write_temperature", "kCold"},
       {"default_temperature", "kHot"},
       {"persist_user_defined_timestamps", "true"},
       {"memtable_max_range_deletions", "0"},
@@ -2451,7 +2456,6 @@ TEST_F(OptionsOldApiTest, GetOptionsFromMapTest) {
   ASSERT_EQ(new_cf_opt.target_file_size_multiplier, 13);
   ASSERT_EQ(new_cf_opt.max_bytes_for_level_base, 14U);
   ASSERT_EQ(new_cf_opt.level_compaction_dynamic_level_bytes, true);
-  ASSERT_EQ(new_cf_opt.level_compaction_dynamic_file_size, true);
   ASSERT_EQ(new_cf_opt.max_bytes_for_level_multiplier, 15.0);
   ASSERT_EQ(new_cf_opt.max_bytes_for_level_multiplier_additional.size(), 3U);
   ASSERT_EQ(new_cf_opt.max_bytes_for_level_multiplier_additional[0], 16);
@@ -2485,6 +2489,7 @@ TEST_F(OptionsOldApiTest, GetOptionsFromMapTest) {
   ASSERT_EQ(new_cf_opt.memtable_huge_page_size, 28U);
   ASSERT_EQ(new_cf_opt.bloom_locality, 29U);
   ASSERT_EQ(new_cf_opt.max_successive_merges, 30U);
+  ASSERT_EQ(new_cf_opt.strict_max_successive_merges, true);
   ASSERT_TRUE(new_cf_opt.prefix_extractor != nullptr);
   ASSERT_EQ(new_cf_opt.optimize_filters_for_hits, true);
   ASSERT_EQ(new_cf_opt.prefix_extractor->AsString(), "rocksdb.FixedPrefix.31");
@@ -2500,7 +2505,7 @@ TEST_F(OptionsOldApiTest, GetOptionsFromMapTest) {
   ASSERT_EQ(new_cf_opt.blob_file_starting_level, 1);
   ASSERT_EQ(new_cf_opt.prepopulate_blob_cache, PrepopulateBlobCache::kDisable);
   ASSERT_EQ(new_cf_opt.last_level_temperature, Temperature::kWarm);
-  ASSERT_EQ(new_cf_opt.bottommost_temperature, Temperature::kWarm);
+  ASSERT_EQ(new_cf_opt.default_write_temperature, Temperature::kCold);
   ASSERT_EQ(new_cf_opt.default_temperature, Temperature::kHot);
   ASSERT_EQ(new_cf_opt.persist_user_defined_timestamps, true);
   ASSERT_EQ(new_cf_opt.memtable_max_range_deletions, 0);
@@ -3672,8 +3677,8 @@ TEST_F(OptionsParserTest, Readahead) {
   std::vector<std::string> cf_names = {"default", one_mb_string};
   const std::string kOptionsFileName = "test-persisted-options.ini";
 
-  ASSERT_OK(PersistRocksDBOptions(base_db_opt, cf_names, base_cf_opts,
-                                  kOptionsFileName, fs_.get()));
+  ASSERT_OK(PersistRocksDBOptions(WriteOptions(), base_db_opt, cf_names,
+                                  base_cf_opts, kOptionsFileName, fs_.get()));
 
   uint64_t file_size = 0;
   ASSERT_OK(
@@ -3747,8 +3752,8 @@ TEST_F(OptionsParserTest, DumpAndParse) {
   const std::string kOptionsFileName = "test-persisted-options.ini";
   // Use default for escaped(true), unknown(false) and check (exact)
   ConfigOptions config_options;
-  ASSERT_OK(PersistRocksDBOptions(base_db_opt, cf_names, base_cf_opts,
-                                  kOptionsFileName, fs_.get()));
+  ASSERT_OK(PersistRocksDBOptions(WriteOptions(), base_db_opt, cf_names,
+                                  base_cf_opts, kOptionsFileName, fs_.get()));
 
   RocksDBOptionsParser parser;
   ASSERT_OK(parser.Parse(config_options, kOptionsFileName, fs_.get()));
@@ -3808,9 +3813,9 @@ TEST_F(OptionsParserTest, DifferentDefault) {
   ColumnFamilyOptions cf_univ_opts;
   cf_univ_opts.OptimizeUniversalStyleCompaction();
 
-  ASSERT_OK(PersistRocksDBOptions(DBOptions(), {"default", "universal"},
-                                  {cf_level_opts, cf_univ_opts},
-                                  kOptionsFileName, fs_.get()));
+  ASSERT_OK(PersistRocksDBOptions(
+      WriteOptions(), DBOptions(), {"default", "universal"},
+      {cf_level_opts, cf_univ_opts}, kOptionsFileName, fs_.get()));
 
   RocksDBOptionsParser parser;
   ASSERT_OK(parser.Parse(kOptionsFileName, fs_.get(), false,
@@ -3953,8 +3958,8 @@ class OptionsSanityCheckTest : public OptionsParserTest,
     if (!s.ok()) {
       return s;
     }
-    return PersistRocksDBOptions(db_opts, {"default"}, {cf_opts},
-                                 kOptionsFileName, fs_.get());
+    return PersistRocksDBOptions(WriteOptions(), db_opts, {"default"},
+                                 {cf_opts}, kOptionsFileName, fs_.get());
   }
 
   Status PersistCFOptions(const ColumnFamilyOptions& cf_opts) {

@@ -520,6 +520,24 @@ Status TransactionBaseImpl::Delete(ColumnFamilyHandle* column_family,
 }
 
 Status TransactionBaseImpl::Delete(ColumnFamilyHandle* column_family,
+                                   const Slice& key,
+                                   const bool assume_tracked,
+                                   uint64_t dpt) {
+  const bool do_validate = !assume_tracked;
+  Status s = TryLock(column_family, key, false /* read_only */,
+                     true /* exclusive */, do_validate, assume_tracked);
+
+  if (s.ok()) {
+    s = GetBatchForWrite()->Delete(column_family, key, dpt);
+    if (s.ok()) {
+      num_deletes_++;
+    }
+  }
+
+  return s;
+}
+
+Status TransactionBaseImpl::Delete(ColumnFamilyHandle* column_family,
                                    const SliceParts& key,
                                    const bool assume_tracked) {
   const bool do_validate = !assume_tracked;

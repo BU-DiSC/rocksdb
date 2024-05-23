@@ -35,7 +35,6 @@ Status PromoteL0(DB* db, ColumnFamilyHandle* column_family, int target_level) {
   return db->PromoteL0(column_family, target_level);
 }
 
-
 Status SuggestCompactRange(DB* db, const Slice* begin, const Slice* end) {
   return SuggestCompactRange(db, db->DefaultColumnFamily(), begin, end);
 }
@@ -110,7 +109,8 @@ Status UpdateManifestForFilesState(
                   lf->file_creation_time, lf->epoch_number, lf->file_checksum,
                   lf->file_checksum_func_name, lf->unique_id,
                   lf->compensated_range_deletion_size, lf->tail_size,
-                  lf->user_defined_timestamps_persisted);
+                  lf->user_defined_timestamps_persisted,
+                  lf->fd.expiration_time);
             }
           }
         } else {

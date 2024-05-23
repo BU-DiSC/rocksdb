@@ -354,7 +354,8 @@ std::map<CompactionPri, std::string> OptionsHelper::compaction_pri_to_string = {
     {kOldestLargestSeqFirst, "kOldestLargestSeqFirst"},
     {kOldestSmallestSeqFirst, "kOldestSmallestSeqFirst"},
     {kMinOverlappingRatio, "kMinOverlappingRatio"},
-    {kRoundRobin, "kRoundRobin"}};
+    {kRoundRobin, "kRoundRobin"},
+    {kFADE, "kFADE"}};
 
 std::map<CompactionStopStyle, std::string>
     OptionsHelper::compaction_stop_style_to_string = {
@@ -826,7 +827,8 @@ std::unordered_map<std::string, CompactionPri>
         {"kOldestLargestSeqFirst", kOldestLargestSeqFirst},
         {"kOldestSmallestSeqFirst", kOldestSmallestSeqFirst},
         {"kMinOverlappingRatio", kMinOverlappingRatio},
-        {"kRoundRobin", kRoundRobin}};
+        {"kRoundRobin", kRoundRobin},
+        {"kFADE", kFADE}};
 
 std::unordered_map<std::string, CompactionStopStyle>
     OptionsHelper::compaction_stop_style_string_map = {

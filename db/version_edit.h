@@ -109,6 +109,7 @@ constexpr uint64_t kFileNumberMask = 0x3FFFFFFFFFFFFFFF;
 constexpr uint64_t kUnknownOldestAncesterTime = 0;
 constexpr uint64_t kUnknownFileCreationTime = 0;
 constexpr uint64_t kUnknownEpochNumber = 0;
+constexpr uint64_t kUnknownExpirationTime = 0;
 // If `Options::allow_ingest_behind` is true, this epoch number
 // will be dedicated to files ingested behind.
 constexpr uint64_t kReservedEpochNumberForFileIngestedBehind = 1;
@@ -127,6 +128,7 @@ struct FileDescriptor {
   uint64_t file_size;             // File size in bytes
   SequenceNumber smallest_seqno;  // The smallest seqno in this file
   SequenceNumber largest_seqno;   // The largest seqno in this file
+  uint64_t expiration_time;       // Unix time when the SST file expires in current level
 
   FileDescriptor() : FileDescriptor(0, 0, 0) {}
 
@@ -134,12 +136,14 @@ struct FileDescriptor {
       : FileDescriptor(number, path_id, _file_size, kMaxSequenceNumber, 0) {}
 
   FileDescriptor(uint64_t number, uint32_t path_id, uint64_t _file_size,
-                 SequenceNumber _smallest_seqno, SequenceNumber _largest_seqno)
+                 SequenceNumber _smallest_seqno, SequenceNumber _largest_seqno,
+                 uint64_t _expiration_time = kUnknownExpirationTime)
       : table_reader(nullptr),
         packed_number_and_path_id(PackFileNumberAndPathId(number, path_id)),
         file_size(_file_size),
         smallest_seqno(_smallest_seqno),
-        largest_seqno(_largest_seqno) {}
+        largest_seqno(_largest_seqno),
+        expiration_time(_expiration_time) {}
 
   FileDescriptor(const FileDescriptor& fd) { *this = fd; }
 
@@ -149,6 +153,7 @@ struct FileDescriptor {
     file_size = fd.file_size;
     smallest_seqno = fd.smallest_seqno;
     largest_seqno = fd.largest_seqno;
+    expiration_time = fd.expiration_time;
     return *this;
   }
 
@@ -270,8 +275,10 @@ struct FileMetaData {
                const std::string& _file_checksum_func_name,
                UniqueId64x2 _unique_id,
                const uint64_t _compensated_range_deletion_size,
-               uint64_t _tail_size, bool _user_defined_timestamps_persisted)
-      : fd(file, file_path_id, file_size, smallest_seq, largest_seq),
+               uint64_t _tail_size, bool _user_defined_timestamps_persisted,
+               const uint64_t _expiration_time = kUnknownExpirationTime)
+      : fd(file, file_path_id, file_size, smallest_seq, largest_seq,
+           _expiration_time),
         smallest(smallest_key),
         largest(largest_key),
         compensated_range_deletion_size(_compensated_range_deletion_size),
@@ -481,7 +488,8 @@ class VersionEdit {
                const std::string& file_checksum_func_name,
                const UniqueId64x2& unique_id,
                const uint64_t compensated_range_deletion_size,
-               uint64_t tail_size, bool user_defined_timestamps_persisted) {
+               uint64_t tail_size, bool user_defined_timestamps_persisted,
+               uint64_t expiration_time = kUnknownExpirationTime) {
     assert(smallest_seqno <= largest_seqno);
     new_files_.emplace_back(
         level,
@@ -491,7 +499,7 @@ class VersionEdit {
                      file_creation_time, epoch_number, file_checksum,
                      file_checksum_func_name, unique_id,
                      compensated_range_deletion_size, tail_size,
-                     user_defined_timestamps_persisted));
+                     user_defined_timestamps_persisted, expiration_time));
     files_to_quarantine_.push_back(file);
     if (!HasLastSequence() || largest_seqno > GetLastSequence()) {
       SetLastSequence(largest_seqno);

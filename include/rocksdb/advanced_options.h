@@ -59,6 +59,7 @@ enum CompactionPri : char {
   // level. The file picking process will cycle through all the files in a
   // round-robin manner.
   kRoundRobin = 0x4,
+  kFADE = 0x5,
 };
 
 struct FileTemperatureAge {
@@ -593,7 +594,7 @@ struct AdvancedColumnFamilyOptions {
   // If level compaction_style = kCompactionStyleLevel, for each level,
   // which files are prioritized to be picked to compact.
   // Default: kMinOverlappingRatio
-  CompactionPri compaction_pri = kMinOverlappingRatio;
+  CompactionPri compaction_pri = kFADE;
 
   // The options needed to support Universal Style compactions
   //

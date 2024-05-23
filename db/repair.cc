@@ -59,8 +59,6 @@
 //   Store per-table metadata (smallest, largest, largest-seq#, ...)
 //   in the table's meta section to speed up ScanTable.
 
-#include "db/version_builder.h"
-
 #include <cinttypes>
 
 #include "db/builder.h"
@@ -70,6 +68,7 @@
 #include "db/log_writer.h"
 #include "db/memtable.h"
 #include "db/table_cache.h"
+#include "db/version_builder.h"
 #include "db/version_edit.h"
 #include "db/write_batch_internal.h"
 #include "file/filename.h"
@@ -715,7 +714,8 @@ class Repairer {
             table->meta.epoch_number, table->meta.file_checksum,
             table->meta.file_checksum_func_name, table->meta.unique_id,
             table->meta.compensated_range_deletion_size, table->meta.tail_size,
-            table->meta.user_defined_timestamps_persisted);
+            table->meta.user_defined_timestamps_persisted,
+            table->meta.fd.expiration_time);
       }
       s = dummy_version_builder.Apply(&dummy_edit);
       if (s.ok()) {

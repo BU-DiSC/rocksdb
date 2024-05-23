@@ -3617,6 +3617,7 @@ void VersionStorageInfo::ComputeCompactionScore(
       mutable_cf_options.blob_garbage_collection_age_cutoff,
       mutable_cf_options.blob_garbage_collection_force_threshold,
       mutable_cf_options.enable_blob_garbage_collection);
+  ComputeExpiredDPTFiles(immutable_options);
 
   EstimateCompactionBytesNeeded(mutable_cf_options);
 }
@@ -3639,6 +3640,28 @@ void VersionStorageInfo::ComputeFilesMarkedForCompaction(int last_level) {
     for (auto* f : files_[level]) {
       if (!f->being_compacted && f->marked_for_compaction) {
         files_marked_for_compaction_.emplace_back(level, f);
+      }
+    }
+  }
+}
+
+void VersionStorageInfo::ComputeExpiredDPTFiles(
+    const ImmutableOptions& ioptions) {
+  expired_dpt_files_.clear();
+  if (compaction_style_ != CompactionStyle::kCompactionStyleLevel) {
+    return;
+  }
+
+  int64_t _current_time;
+  auto status = ioptions.clock->GetCurrentTime(&_current_time);
+  if (!status.ok()) {
+    return;
+  }
+  const uint64_t current_time = static_cast<uint64_t>(_current_time);
+  for (int level = 0; level < num_levels() - 1; level++) {
+    for (FileMetaData* f : files_[level]) {
+      if (!f->being_compacted && f->fd.expiration_time < current_time) {
+        expired_dpt_files_.emplace_back(level, f);
       }
     }
   }
@@ -4122,6 +4145,13 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
       case kRoundRobin:
         SortFileByRoundRobin(*internal_comparator_, &compact_cursor_,
                              level0_non_overlapping_, level, &temp);
+        break;
+      case kFADE:
+        std::sort(temp.begin(), temp.end(),
+                  [](const Fsize& f1, const Fsize& f2) -> bool {
+                    return f1.file->fd.expiration_time <
+                           f2.file->fd.expiration_time;
+                  });
         break;
       default:
         assert(false);
@@ -6651,15 +6681,15 @@ Status VersionSet::WriteCurrentStateToManifest(
         for (const auto& f : level_files) {
           assert(f);
 
-          edit.AddFile(level, f->fd.GetNumber(), f->fd.GetPathId(),
-                       f->fd.GetFileSize(), f->smallest, f->largest,
-                       f->fd.smallest_seqno, f->fd.largest_seqno,
-                       f->marked_for_compaction, f->temperature,
-                       f->oldest_blob_file_number, f->oldest_ancester_time,
-                       f->file_creation_time, f->epoch_number, f->file_checksum,
-                       f->file_checksum_func_name, f->unique_id,
-                       f->compensated_range_deletion_size, f->tail_size,
-                       f->user_defined_timestamps_persisted);
+          edit.AddFile(
+              level, f->fd.GetNumber(), f->fd.GetPathId(), f->fd.GetFileSize(),
+              f->smallest, f->largest, f->fd.smallest_seqno,
+              f->fd.largest_seqno, f->marked_for_compaction, f->temperature,
+              f->oldest_blob_file_number, f->oldest_ancester_time,
+              f->file_creation_time, f->epoch_number, f->file_checksum,
+              f->file_checksum_func_name, f->unique_id,
+              f->compensated_range_deletion_size, f->tail_size,
+              f->user_defined_timestamps_persisted, f->fd.expiration_time);
         }
       }
 

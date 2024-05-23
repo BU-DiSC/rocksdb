@@ -519,6 +519,23 @@ std::tuple<Slice, uint64_t> ParsePackedValueWithWriteTime(const Slice& value) {
                          ParsePackedValueForWriteTime(value));
 }
 
+uint64_t ParsePackedValueForDPT(const Slice& value) {
+  if (value.size() < sizeof(uint64_t)) {
+    return 0;
+  }
+  Slice dpt_slice(value.data() + value.size() - sizeof(uint64_t),
+                  sizeof(uint64_t));
+  uint64_t dpt;
+  [[maybe_unused]] auto res = GetFixed64(&dpt_slice, &dpt);
+  assert(res);
+  return dpt;
+}
+
+std::tuple<Slice, uint64_t> ParsePackedValueWithDPT(const Slice& value) {
+  return std::make_tuple(Slice(value.data(), value.size() - sizeof(uint64_t)),
+                         ParsePackedValueForDPT(value));
+}
+
 SequenceNumber ParsePackedValueForSeqno(const Slice& value) {
   assert(value.size() >= sizeof(SequenceNumber));
   Slice seqno_slice(value.data() + value.size() - sizeof(uint64_t),

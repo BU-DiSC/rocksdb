@@ -83,7 +83,8 @@ struct SstFileMetaData : public FileStorageInfo {
                   uint64_t _oldest_blob_file_number,
                   uint64_t _oldest_ancester_time, uint64_t _file_creation_time,
                   uint64_t _epoch_number, std::string& _file_checksum,
-                  std::string& _file_checksum_func_name)
+                  std::string& _file_checksum_func_name,
+                  uint64_t _expiration_time = 0)
       : smallest_seqno(_smallest_seqno),
         largest_seqno(_largest_seqno),
         smallestkey(_smallestkey),
@@ -95,7 +96,8 @@ struct SstFileMetaData : public FileStorageInfo {
         oldest_blob_file_number(_oldest_blob_file_number),
         oldest_ancester_time(_oldest_ancester_time),
         file_creation_time(_file_creation_time),
-        epoch_number(_epoch_number) {
+        epoch_number(_epoch_number),
+        expiration_time(_expiration_time) {
     if (!_file_name.empty()) {
       if (_file_name[0] == '/') {
         relative_filename = _file_name.substr(1);
@@ -148,6 +150,8 @@ struct SstFileMetaData : public FileStorageInfo {
   // For L0, larger `epoch_number` indicates newer L0 file.
   // 0 if the information is not available.
   uint64_t epoch_number = 0;
+
+  uint64_t expiration_time = 0;
 
   // These bounds define the effective key range for range tombstones
   // in this file.

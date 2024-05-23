@@ -523,6 +523,12 @@ Status TransactionBaseImpl::Delete(ColumnFamilyHandle* column_family,
                                    const Slice& key,
                                    const bool assume_tracked,
                                    uint64_t dpt) {
+  ROCKS_LOG_INFO(dbimpl_->immutable_db_options().info_log,
+                 "(FADE) TransactionBaseImpl::Delete with DPT: %ld", dpt);
+  if (0 == dpt) {
+    return Delete(column_family, key, assume_tracked);
+  }
+
   const bool do_validate = !assume_tracked;
   Status s = TryLock(column_family, key, false /* read_only */,
                      true /* exclusive */, do_validate, assume_tracked);

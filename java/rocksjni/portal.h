@@ -4761,6 +4761,8 @@ class CompactionPriorityJni {
         return 0x3;
       case ROCKSDB_NAMESPACE::CompactionPri::kRoundRobin:
         return 0x4;
+      case ROCKSDB_NAMESPACE::CompactionPri::kFADE:
+        return 0x5;
       default:
         return 0x0;  // undefined
     }
@@ -4781,6 +4783,8 @@ class CompactionPriorityJni {
         return ROCKSDB_NAMESPACE::CompactionPri::kMinOverlappingRatio;
       case 0x4:
         return ROCKSDB_NAMESPACE::CompactionPri::kRoundRobin;
+      case 0x5:
+        return ROCKSDB_NAMESPACE::CompactionPri::kFADE;
       default:
         // undefined/default
         return ROCKSDB_NAMESPACE::CompactionPri::kByCompensatedSize;

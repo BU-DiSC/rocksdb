@@ -21,6 +21,9 @@ namespace ROCKSDB_NAMESPACE {
 
 bool LevelCompactionPicker::NeedsCompaction(
     const VersionStorageInfo* vstorage) const {
+  if (!vstorage->ExpiredDptFiles().empty()) {
+    return true;
+  }
   if (!vstorage->ExpiredTtlFiles().empty()) {
     return true;
   }
@@ -300,6 +303,13 @@ void LevelCompactionBuilder::SetupInitialFiles() {
                     CompactToNextLevel::kSkipLastLevel);
   if (!start_level_inputs_.empty()) {
     compaction_reason_ = CompactionReason::kTtl;
+    return;
+  }
+
+  // FADE Compaction
+  PickFileToCompact(vstorage_->ExpiredDptFiles(), CompactToNextLevel::kYes);
+  if (!start_level_inputs_.empty()) {
+    compaction_reason_ = CompactionReason::kFADE;
     return;
   }
 

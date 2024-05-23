@@ -235,9 +235,11 @@ enum Tickers : uint32_t {
   COMPACT_READ_BYTES_MARKED,
   COMPACT_READ_BYTES_PERIODIC,
   COMPACT_READ_BYTES_TTL,
+  COMPACT_READ_BYTES_FADE,
   COMPACT_WRITE_BYTES_MARKED,
   COMPACT_WRITE_BYTES_PERIODIC,
   COMPACT_WRITE_BYTES_TTL,
+  COMPACT_WRITE_BYTES_FADE,
 
   // Number of table's properties loaded directly from file, without creating
   // table reader object.

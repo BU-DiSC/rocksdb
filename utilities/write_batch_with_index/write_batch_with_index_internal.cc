@@ -294,12 +294,12 @@ void BaseDeltaIterator::SetValueAndColumnsFromDelta() {
 
   ValueType result_type = kTypeValue;
 
-  if (delta_entry.type == kDeleteRecord ||
-      delta_entry.type == kSingleDeleteRecord) {
+  if (delta_entry.type == kSingleDeleteRecord) {
     status_ = WriteBatchWithIndexInternal::MergeKeyWithNoBaseValue(
         column_family_, delta_entry.key, merge_context_, &merge_result_,
         /* result_operand */ nullptr, &result_type);
-  } else if (delta_entry.type == kPutRecord) {
+  } else if (delta_entry.type == kPutRecord ||
+             delta_entry.type == kDeleteRecord) {
     status_ = WriteBatchWithIndexInternal::MergeKeyWithBaseValue(
         column_family_, delta_entry.key, MergeHelper::kPlainBaseValue,
         delta_entry.value, merge_context_, &merge_result_,

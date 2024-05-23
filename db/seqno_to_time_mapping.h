@@ -284,6 +284,10 @@ uint64_t ParsePackedValueForWriteTime(const Slice& value);
 // Slice is backed up by the same memory backing up `value`.
 std::tuple<Slice, uint64_t> ParsePackedValueWithWriteTime(const Slice& value);
 
+uint64_t ParsePackedValueForDPT(const Slice& value);
+
+std::tuple<Slice, uint64_t> ParsePackedValueWithDPT(const Slice& value);
+
 // Parse a packed value to get the sequence number.
 SequenceNumber ParsePackedValueForSeqno(const Slice& value);
 

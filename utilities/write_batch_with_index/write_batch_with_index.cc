@@ -14,6 +14,7 @@
 #include "db/merge_context.h"
 #include "db/merge_helper.h"
 #include "db/wide/wide_columns_helper.h"
+#include "logging/logging.h"
 #include "memory/arena.h"
 #include "memtable/skiplist.h"
 #include "options/db_options.h"
@@ -414,11 +415,18 @@ Status WriteBatchWithIndex::Delete(ColumnFamilyHandle* column_family,
 }
 
 Status WriteBatchWithIndex::Delete(ColumnFamilyHandle* column_family,
-                                   const Slice& /*key*/, uint64_t /*dpt*/) {
-  if (!column_family) {
-    return Status::InvalidArgument("column family handle cannot be nullptr");
+                                   const Slice& key, uint64_t dpt) {
+  auto dbo = static_cast_with_check<ColumnFamilyHandleImpl>(column_family)
+                 ->db()
+                 ->immutable_db_options();
+  ROCKS_LOG_INFO(dbo.info_log, "(FADE) WriteBatchWithIndex::Delete with DPT: %ld",
+                 dpt);
+  rep->SetLastEntryOffset();
+  auto s = rep->write_batch.Delete(column_family, key, dpt);
+  if (s.ok()) {
+    rep->AddOrUpdateIndex(column_family, key, kDeleteRecord);
   }
-  return Status::NotSupported();
+  return s;
 }
 
 Status WriteBatchWithIndex::SingleDelete(ColumnFamilyHandle* column_family,

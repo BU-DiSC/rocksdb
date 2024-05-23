@@ -13,12 +13,12 @@
 //    data: record[count]
 // record :=
 //    kTypeValue varstring varstring
-//    kTypeDeletion varstring
+//    kTypeDeletion varstring fixed64 fixed64
 //    kTypeSingleDeletion varstring
 //    kTypeRangeDeletion varstring varstring
 //    kTypeMerge varstring varstring
 //    kTypeColumnFamilyValue varint32 varstring varstring
-//    kTypeColumnFamilyDeletion varint32 varstring
+//    kTypeColumnFamilyDeletion varint32 varstring fixed64 fixed64
 //    kTypeColumnFamilySingleDeletion varint32 varstring
 //    kTypeColumnFamilyRangeDeletion varint32 varstring varstring
 //    kTypeColumnFamilyMerge varint32 varstring varstring
@@ -389,12 +389,21 @@ Status ReadRecordFromWriteBatch(Slice* input, char* tag,
       }
       break;
     case kTypeColumnFamilyDeletion:
-    case kTypeColumnFamilySingleDeletion:
       if (!GetVarint32(input, column_family)) {
         return Status::Corruption("bad WriteBatch Delete");
       }
       FALLTHROUGH_INTENDED;
     case kTypeDeletion:
+      if (!GetLengthPrefixedSlice(input, key) ||
+          !GetLengthPrefixedSlice(input, value)) {
+        return Status::Corruption("bad WriteBatch Delete");
+      }
+      break;
+    case kTypeColumnFamilySingleDeletion:
+      if (!GetVarint32(input, column_family)) {
+        return Status::Corruption("bad WriteBatch Delete");
+      }
+      FALLTHROUGH_INTENDED;
     case kTypeSingleDeletion:
       if (!GetLengthPrefixedSlice(input, key)) {
         return Status::Corruption("bad WriteBatch Delete");
@@ -1202,6 +1211,7 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
                                   const Slice& key) {
   LocalSavePoint save(b);
   WriteBatchInternal::SetCount(b, WriteBatchInternal::Count(b) + 1);
+  std::string empty_value;
   if (column_family_id == 0) {
     b->rep_.push_back(static_cast<char>(kTypeDeletion));
   } else {
@@ -1209,6 +1219,9 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     PutVarint32(&b->rep_, column_family_id);
   }
   PutLengthPrefixedSlice(&b->rep_, key);
+  PutFixed64(&empty_value, 0);
+  PutFixed64(&empty_value, 0);
+  PutLengthPrefixedSlice(&b->rep_, empty_value);
   b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
                               ContentFlags::HAS_DELETE,
                           std::memory_order_relaxed);
@@ -1264,17 +1277,51 @@ Status WriteBatch::Delete(ColumnFamilyHandle* column_family, const Slice& key,
 
 Status WriteBatch::Delete(ColumnFamilyHandle* column_family, const Slice& key,
                           const uint64_t dpt) {
+  if (key.size() > size_t{std::numeric_limits<uint32_t>::max()}) {
+    return Status::InvalidArgument("key is too large");
+  }
+
+  auto dbo = static_cast_with_check<ColumnFamilyHandleImpl>(column_family)
+                 ->db()
+                 ->immutable_db_options();
+  ROCKS_LOG_INFO(dbo.info_log, "(FADE) WriteBatch::Delete with DPT: %ld", dpt);
+  WriteBatch* b = this;
+  LocalSavePoint save(b);
+  WriteBatchInternal::SetCount(b, WriteBatchInternal::Count(b) + 1);
+  std::string value;
+  int64_t _current_time;
   uint32_t cf_id = column_family->GetID();
-  std::string dpt_hex = (boost::format("%x") % dpt).str();
-  std::array<Slice, 2> key_with_dpt{{key, dpt_hex}};
-  return WriteBatchInternal::Delete(this, cf_id,
-                                    SliceParts(key_with_dpt.data(), 2));
+
+  if (0 == cf_id) {
+    b->rep_.push_back(static_cast<char>(kTypeDeletion));
+  } else {
+    b->rep_.push_back(static_cast<char>(kTypeColumnFamilyDeletion));
+    PutVarint32(&b->rep_, cf_id);
+  }
+  PutLengthPrefixedSlice(&b->rep_, key);
+  auto status = dbo.clock->GetCurrentTime(&_current_time);
+  assert(status.ok());
+  const uint64_t current_time = static_cast<uint64_t>(_current_time);
+  PutFixed64(&value, dpt);
+  PutFixed64(&value, current_time);
+  PutLengthPrefixedSlice(&b->rep_, value);
+  b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
+                              ContentFlags::HAS_DELETE,
+                          std::memory_order_relaxed);
+  if (b->prot_info_ != nullptr) {
+    b->prot_info_->entries_.emplace_back(
+        ProtectionInfo64()
+            .ProtectKVO(key, "" /* value */, kTypeDeletion)
+            .ProtectC(cf_id));
+  }
+  return save.commit();
 }
 
 Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
                                   const SliceParts& key) {
   LocalSavePoint save(b);
   WriteBatchInternal::SetCount(b, WriteBatchInternal::Count(b) + 1);
+  std::string empty_value;
   if (column_family_id == 0) {
     b->rep_.push_back(static_cast<char>(kTypeDeletion));
   } else {
@@ -1282,6 +1329,9 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     PutVarint32(&b->rep_, column_family_id);
   }
   PutLengthPrefixedSliceParts(&b->rep_, key);
+  PutFixed64(&empty_value, 0);
+  PutFixed64(&empty_value, 0);
+  PutLengthPrefixedSlice(&b->rep_, empty_value);
   b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
                               ContentFlags::HAS_DELETE,
                           std::memory_order_relaxed);

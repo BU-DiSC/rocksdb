@@ -302,6 +302,21 @@ Status WriteCommittedTxn::Delete(ColumnFamilyHandle* column_family,
                  });
 }
 
+Status WriteCommittedTxn::Delete(ColumnFamilyHandle* column_family,
+                                   const Slice& key,
+                                   const bool assume_tracked,
+                                   uint64_t dpt) {
+  const bool do_validate = !assume_tracked;
+  return Operate(column_family, key, do_validate, assume_tracked,
+                  [column_family, &key, dpt, this]() {
+                    Status s = GetBatchForWrite()->Delete(column_family, key, dpt);
+                    if (s.ok()) {
+                      ++num_deletes_;
+                   }
+                   return s;
+                  });
+}
+
 Status WriteCommittedTxn::DeleteUntracked(ColumnFamilyHandle* column_family,
                                           const Slice& key) {
   return Operate(column_family, key, /*do_validate=*/false,

@@ -27,6 +27,7 @@
 #include "file/filename.h"
 #include "file/read_write_util.h"
 #include "file/writable_file_writer.h"
+#include "logging/logging.h"
 #include "monitoring/iostats_context_imp.h"
 #include "monitoring/thread_status_util.h"
 #include "options/options_helper.h"
@@ -42,6 +43,7 @@
 #include "table/internal_iterator.h"
 #include "table/unique_id_impl.h"
 #include "test_util/sync_point.h"
+#include "util/dpt_level.h"
 #include "util/stop_watch.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -212,6 +214,12 @@ Status BuildTable(
 
     std::string key_after_flush_buf;
     std::string value_buf;
+    int levels = ioptions.num_levels;
+    double size_ratio = mutable_cf_options.max_bytes_for_level_multiplier;
+    ROCKS_LOG_INFO(db_options.info_log,
+                   "(FADE) BuildTable: levels = %d, size_ratio = %f", levels,
+                   size_ratio);
+    uint64_t min_expiration_time = std::numeric_limits<uint64_t>::max();
     c_iter.SeekToFirst();
     for (; c_iter.Valid(); c_iter.Next()) {
       const Slice& key = c_iter.key();
@@ -229,6 +237,26 @@ Status BuildTable(
         key_after_flush_buf.clear();
         ReplaceInternalKeyWithMinTimestamp(&key_after_flush_buf, key, ts_sz);
         key_after_flush = key_after_flush_buf;
+      }
+
+      if (ikey.type == kTypeDeletion) {
+        Slice unpacked_value;
+        uint64_t tombstone_time;
+        uint64_t tombstone_dpt;
+        std::tie(unpacked_value, tombstone_time) =
+            ParsePackedValueWithDPT(value);
+        std::tie(unpacked_value, tombstone_dpt) =
+            ParsePackedValueWithDPT(unpacked_value);
+        if (tombstone_dpt > 0) {
+          ROCKS_LOG_INFO(
+              db_options.info_log,
+              "(FADE) BuildTable: tombstone with DPT found: "
+              "key=%s, DPT=%lu",
+              key.ToString().c_str(), tombstone_dpt);
+        }
+        min_expiration_time = std::min(
+            min_expiration_time,
+            tombstone_time + GetLevelDPT(tombstone_dpt, 0, levels, size_ratio));
       }
 
       if (ikey.type == kTypeValuePreferredSeqno) {
@@ -284,6 +312,11 @@ Status BuildTable(
     }
 
     if (s.ok()) {
+      ROCKS_LOG_INFO(db_options.info_log,
+                     "(FADE) BuildTable: file expiration time = %lu",
+                     min_expiration_time);
+      meta->fd.expiration_time = min_expiration_time;
+
       auto range_del_it = range_del_agg->NewIterator();
       Slice last_tombstone_start_user_key{};
       for (range_del_it->SeekToFirst(); range_del_it->Valid();

@@ -210,6 +210,9 @@ class VersionStorageInfo {
   // ComputeCompactionScore()
   void ComputeFilesMarkedForCompaction(int last_level);
 
+  // This computes dpt_expired_files_ and is called by ComputeCompactionScore()
+  void ComputeExpiredDPTFiles(const ImmutableOptions& ioptions);
+
   // This computes ttl_expired_files_ and is called by
   // ComputeCompactionScore()
   void ComputeExpiredTtlFiles(const ImmutableOptions& ioptions,
@@ -472,6 +475,14 @@ class VersionStorageInfo {
   // REQUIRES: ComputeCompactionScore has been called
   // REQUIRES: DB mutex held during access
   // Used by Leveled Compaction only.
+  const autovector<std::pair<int, FileMetaData*>>& ExpiredDptFiles() const {
+    assert(finalized_);
+    return expired_dpt_files_;
+  }
+
+  // REQUIRES: ComputeCompactionScore has been called
+  // REQUIRES: DB mutex held during access
+  // Used by Leveled Compaction only.
   const autovector<std::pair<int, FileMetaData*>>& ExpiredTtlFiles() const {
     assert(finalized_);
     return expired_ttl_files_;
@@ -698,6 +709,8 @@ class VersionStorageInfo {
   // currently being compacted. It is protected by DB mutex. It is calculated in
   // ComputeCompactionScore(). Used by Leveled and Universal Compaction.
   autovector<std::pair<int, FileMetaData*>> files_marked_for_compaction_;
+
+  autovector<std::pair<int, FileMetaData*>> expired_dpt_files_;
 
   autovector<std::pair<int, FileMetaData*>> expired_ttl_files_;
 

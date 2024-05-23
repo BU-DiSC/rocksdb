@@ -55,6 +55,7 @@
 #include "table/table_builder.h"
 #include "table/unique_id_impl.h"
 #include "test_util/sync_point.h"
+#include "util/dpt_level.h"
 #include "util/stop_watch.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -101,6 +102,8 @@ const char* GetCompactionReasonString(CompactionReason compaction_reason) {
       return "RoundRobinTtl";
     case CompactionReason::kRefitLevel:
       return "RefitLevel";
+    case CompactionReason::kFADE:
+      return "FADE";
     case CompactionReason::kNumOfReasons:
       // fall through
     default:
@@ -960,8 +963,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options,
   UpdateCompactionJobStats(stats);
 
   auto stream = event_logger_->LogToBuffer(log_buffer_, 8192);
-  stream << "job" << job_id_ << "event"
-         << "compaction_finished"
+  stream << "job" << job_id_ << "event" << "compaction_finished"
          << "compaction_time_micros" << stats.micros
          << "compaction_time_cpu_micros" << stats.cpu_micros << "output_level"
          << compact_->compaction->output_level() << "num_output_files"
@@ -1051,12 +1053,10 @@ void CompactionJob::NotifyOnSubcompactionBegin(
     listener->OnSubcompactionBegin(info);
   }
   info.status.PermitUncheckedError();
-
 }
 
 void CompactionJob::NotifyOnSubcompactionCompleted(
     SubcompactionState* sub_compact) {
-
   if (db_options_.listeners.empty()) {
     return;
   }
@@ -1335,11 +1335,37 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       "CompactionJob::ProcessKeyValueCompaction()::Processing",
       static_cast<void*>(const_cast<Compaction*>(sub_compact->compaction)));
   uint64_t last_cpu_micros = prev_cpu_micros;
+  uint64_t min_expiration_time = std::numeric_limits<uint64_t>::max();
   while (status.ok() && !cfd->IsDropped() && c_iter->Valid()) {
     // Invariant: c_iter.status() is guaranteed to be OK if c_iter->Valid()
     // returns true.
     assert(!end.has_value() ||
            cfd->user_comparator()->Compare(c_iter->user_key(), *end) < 0);
+
+    if (c_iter->ikey().type == kTypeDeletion) {
+      Slice unpacked_value;
+      uint64_t tombstone_time;
+      uint64_t tombstone_dpt;
+      std::tie(unpacked_value, tombstone_time) =
+          ParsePackedValueWithDPT(c_iter->value());
+      std::tie(unpacked_value, tombstone_dpt) =
+          ParsePackedValueWithDPT(unpacked_value);
+      if (tombstone_dpt > 0) {
+        ROCKS_LOG_INFO(db_options_.info_log,
+                       "(FADE) CompactionJob::ProcessKeyValueCompaction: "
+                       "tombstone with DPT found: "
+                       "key=%s, tombstone_time=%lu , DPT=%lu, to level %d",
+                       c_iter->user_key().ToString().c_str(), tombstone_time,
+                       tombstone_dpt, sub_compact->compaction->output_level());
+      }
+      min_expiration_time = std::min(
+          min_expiration_time,
+          tombstone_time +
+              GetLevelDPT(
+                  tombstone_dpt, sub_compact->compaction->output_level(),
+                  sub_compact->compaction->immutable_options()->num_levels,
+                  mutable_cf_options->max_bytes_for_level_multiplier));
+    }
 
     if (c_iter_stats.num_input_records % kRecordStatsEvery ==
         kRecordStatsEvery - 1) {
@@ -1381,6 +1407,13 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     }
 #endif  // NDEBUG
   }
+
+  sub_compact->Current().GetMetaData()->fd.expiration_time =
+      min_expiration_time;
+  ROCKS_LOG_INFO(db_options_.info_log,
+                 "(FADE) CompactionJob::ProcessKeyValueCompaction: "
+                 "file expiration time = %lu",
+                 min_expiration_time);
 
   // This number may not be accurate when CompactionIterator was created
   // with `must_count_input_entries=false`.
@@ -1822,6 +1855,9 @@ void CompactionJob::RecordCompactionIOStats() {
   } else if (compaction_reason == CompactionReason::kTtl) {
     RecordTick(stats_, COMPACT_READ_BYTES_TTL, IOSTATS(bytes_read));
     RecordTick(stats_, COMPACT_WRITE_BYTES_TTL, IOSTATS(bytes_written));
+  } else if (compaction_reason == CompactionReason::kFADE) {
+    RecordTick(stats_, COMPACT_READ_BYTES_FADE, IOSTATS(bytes_read));
+    RecordTick(stats_, COMPACT_WRITE_BYTES_FADE, IOSTATS(bytes_written));
   }
   ThreadStatusUtil::IncreaseThreadOperationProperty(
       ThreadStatus::COMPACTION_BYTES_READ, IOSTATS(bytes_read));
@@ -2100,8 +2136,7 @@ void CompactionJob::LogCompaction() {
                    cfd->GetName().c_str(), scratch);
     // build event logger report
     auto stream = event_logger_->Log();
-    stream << "job" << job_id_ << "event"
-           << "compaction_started"
+    stream << "job" << job_id_ << "event" << "compaction_started"
            << "compaction_reason"
            << GetCompactionReasonString(compaction->compaction_reason());
     for (size_t i = 0; i < compaction->num_input_levels(); ++i) {

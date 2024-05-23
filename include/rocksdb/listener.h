@@ -157,6 +157,7 @@ enum class CompactionReason : int {
   // [InternalOnly] DBImpl::ReFitLevel treated as a compaction,
   // Used only for internal conflict checking with other compactions
   kRefitLevel,
+  kFADE,
   // total number of compaction reasons, new reasons must be added above this.
   kNumOfReasons,
 };
@@ -367,6 +368,8 @@ struct FlushJobInfo {
 
   // Information about blob files created during flush in Integrated BlobDB.
   std::vector<BlobFileAdditionInfo> blob_file_addition_infos;
+
+  uint64_t expiration_time;
 };
 
 struct CompactionFileInfo {

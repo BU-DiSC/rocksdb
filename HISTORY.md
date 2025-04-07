@@ -1,6 +1,89 @@
 # Rocksdb Change Log
 > NOTE: Entries for next release do not go here. Follow instructions in `unreleased_history/README.txt`
 
+## 10.1.0 (03/24/2025)
+### New Features
+* Added a new `DBOptions.calculate_sst_write_lifetime_hint_set` setting that allows to customize which compaction styles SST write lifetime hint calculation is allowed on. Today RocksDB supports only two modes `kCompactionStyleLevel` and `kCompactionStyleUniversal`.
+* Add a new field `num_l0_files` in `CompactionJobInfo` about the number of L0 files in the CF right before and after the compaction
+* Added per-key-placement feature in Remote Compaction
+* Implemented API DB::GetPropertiesOfTablesByLevel that retrieves table properties for files in each LSM tree level
+
+### Public API Changes
+* `GetAllKeyVersions()` now interprets empty slices literally, as valid keys, and uses new `OptSlice` type default value for extreme upper and lower range limits.
+* `DeleteFilesInRanges()` now takes `RangeOpt` which is based on `OptSlice`. The overload taking `RangePtr` is deprecated.
+* Add an unordered map of name/value pairs, ReadOptions::property_bag, to pass opaque options through to an external table when creating an Iterator.
+* Introduced CompactionServiceJobStatus::kAborted to allow handling aborted scenario in Schedule(), Wait() or OnInstallation() APIs in Remote Compactions.
+* format\_version < 2 in BlockBasedTableOptions is no longer supported for writing new files. Support for reading such files is deprecated and might be removed in the future. `CompressedSecondaryCacheOptions::compress_format_version == 1` is also deprecated.
+
+### Behavior Changes
+* `ldb` now returns an error if the specified `--compression_type` is not supported in the build.
+* MultiGet with snapshot and ReadOptions::read_tier = kPersistedTier will now read a consistent view across CFs (instead of potentially reading some CF before and some CF after a flush).
+* CreateColumnFamily() is no longer allowed on a read-only DB (OpenForReadOnly())
+
+### Bug Fixes
+* Fixed stats for Tiered Storage with preclude_last_level feature
+
+## 10.0.0 (02/21/2025)
+### New Features
+* Introduced new `auto_refresh_iterator_with_snapshot` opt-in knob that (when enabled) will periodically release obsolete memory and storage resources for as long as the iterator is making progress and its supplied `read_options.snapshot` was initialized with non-nullptr value.
+* Added the ability to plug-in a custom table reader implementation. See include/rocksdb/external_table_reader.h for more details.
+* Experimental feature: RocksDB now supports FAISS inverted file based indices via the secondary indexing framework. Applications can use FAISS secondary indices to automatically quantize embeddings and perform K-nearest-neighbors similarity searches. See `FaissIVFIndex` and `SecondaryIndex` for more details. Note: the FAISS integration currently requires using the BUCK build.
+* Add new DB property `num_running_compaction_sorted_runs` that tracks the number of sorted runs being processed by currently running compactions
+* Experimental feature: added support for simple secondary indices that index the specified column as-is. See `SimpleSecondaryIndex` and `SecondaryIndex` for more details.
+* Added new `TransactionDBOptions::txn_commit_bypass_memtable_threshold`, which enables optimized transaction commit (see `TransactionOptions::commit_bypass_memtable`) when the transaction size exceeds a configured threshold.
+
+### Public API Changes
+* Updated the query API of the experimental secondary indexing feature by removing the earlier `SecondaryIndex::NewIterator` virtual and adding a `SecondaryIndexIterator` class that can be utilized by applications to find the primary keys for a given search target.
+* Added back the ability to leverage the primary key when building secondary index entries. This involved changes to the signatures of `SecondaryIndex::GetSecondary{KeyPrefix,Value}` as well as the addition of a new method `SecondaryIndex::FinalizeSecondaryKeyPrefix`. See the API comments for more details.
+* Minimum supported version of ZSTD is now 1.4.0, for code simplification. Obsolete `CompressionType` `kZSTDNotFinalCompression` is also removed.
+
+### Behavior Changes
+* `VerifyBackup` in `verify_with_checksum`=`true` mode will now evaluate checksums in parallel. As a result, unlike in case of original implementation, the API won't bail out on a very first corruption / mismatch and instead will iterate over all the backup files logging success / _degree_of_failure_ for each.
+* Reversed the order of updates to the same key in WriteBatchWithIndex. This means if there are multiple updates to the same key, the most recent update is ordered first. This affects the output of WBWIIterator. When WriteBatchWithIndex is created with `overwrite_key=true`, this affects the output only if Merge is used (#13387).
+* Added support for Merge operations in transactions using option `TransactionOptions::commit_bypass_memtable`.
+
+### Bug Fixes
+* Fixed GetMergeOperands() API in ReadOnlyDB and SecondaryDB
+* Fix a bug in `GetMergeOperands()` that can return incorrect status (MergeInProgress) and incorrect number of merge operands. This can happen when `GetMergeOperandsOptions::continue_cb` is set, both active and immutable memtables have merge operands and the callback stops the look up at the immutable memtable.
+
+## 9.11.0 (01/17/2025)
+### New Features
+* Introduce CancelAwaitingJobs() in CompactionService interface which will allow users to implement cancellation of running remote compactions from the primary instance
+* Experimental feature: RocksDB now supports defining secondary indices, which are automatically maintained by the storage engine. Secondary indices provide a new customization point: applications can provide their own by implementing the new `SecondaryIndex` interface. See the `SecondaryIndex` API comments for more details. Note: this feature is currently only available in conjunction with write-committed pessimistic transactions, and `Merge` is not yet supported.
+* Provide a new option `track_and_verify_wals` to track and verify various information about WAL during WAL recovery. This is intended to be a better replacement to `track_and_verify_wals_in_manifest`.
+
+### Public API Changes
+* Add `io_buffer_size` to BackupEngineOptions to enable optimal configuration of IO size
+* Clean up all the references to `random_access_max_buffer_size`, related rules and all the clients wrappers. This option has been officially deprecated in 5.4.0.
+* Add `file_ingestion_nanos` and `file_ingestion_blocking_live_writes_nanos` in PerfContext to observe file ingestions
+* Offer new DB::Open and variants that use `std::unique_ptr<DB>*` output parameters and deprecate the old versions that use `DB**` output parameters.
+* The DB::DeleteFile API is officially deprecated.
+
+### Behavior Changes
+* For leveled compaction, manual compaction (CompactRange()) will be more strict about keeping compaction size under `max_compaction_bytes`. This prevents overly large compactions in some cases (#13306).
+* Experimental tiering options `preclude_last_level_data_seconds` and `preserve_internal_time_seconds` are now mutable with `SetOptions()`. Some changes to handling of these features along with long-lived snapshots and range deletes made this possible.
+
+### Bug Fixes
+* Fix a longstanding major bug with SetOptions() in which setting changes can be quietly reverted.
+
+## 9.10.0 (12/12/2024)
+### New Features
+* Introduce `TransactionOptions::commit_bypass_memtable` to enable transaction commit to bypass memtable insertions. This can be beneficial for transactions with many operations, as it reduces commit time that is mostly spent on memtable insertion.
+
+### Public API Changes
+* Deprecated Remote Compaction APIs (StartV2, WaitForCompleteV2) are completely removed from the codebase
+
+### Behavior Changes
+* DB::KeyMayExist() now follows its function comment, which means `value` parameter can be null, and it will be set only if `value_found` is passed in.
+
+### Bug Fixes
+* Fix the issue where compaction incorrectly drops a key when there is a snapshot with a sequence number of zero.
+* Honor ConfigOptions.ignore_unknown_options in ParseStruct()
+
+### Performance Improvements
+* Enable reuse of file system allocated buffer for synchronous prefetching.
+* In buffered IO mode, try to align writes on power of 2 if checksum handoff is not enabled for the file type being written.
+
 ## 9.9.0 (11/18/2024)
 ### New Features
 * Multi-Column-Family-Iterator (CoalescingIterator/AttributeGroupIterator) is no longer marked as experimental

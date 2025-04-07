@@ -380,6 +380,33 @@ struct FileMetaData {
     assert(!res || fd.smallest_seqno == fd.largest_seqno);
     return res;
   }
+
+  static uint64_t CalculateTailSize(uint64_t file_size,
+                                    const TableProperties& props) {
+#ifndef NDEBUG
+    bool skip = false;
+    TEST_SYNC_POINT_CALLBACK("FileMetaData::CalculateTailSize", &skip);
+    if (skip) {
+      return 0;
+    }
+#endif  // NDEBUG
+    uint64_t tail_size = 0;
+
+    // Differentiate between a file with no data blocks (tail_start_offset = 0)
+    // and a file with unknown tail_start_offset (also set to 0 due to
+    // non-negative integer storage limitation)
+    bool contain_no_data_blocks =
+        props.num_entries == 0 ||
+        (props.num_entries > 0 &&
+         (props.num_entries == props.num_range_deletions));
+
+    if (props.tail_start_offset > 0 || contain_no_data_blocks) {
+      assert(props.tail_start_offset <= file_size);
+      tail_size = file_size - props.tail_start_offset;
+    }
+
+    return tail_size;
+  }
 };
 
 // A compressed copy of file meta data that just contain minimum data needed
@@ -685,6 +712,9 @@ class VersionEdit {
 
   bool IsColumnFamilyDrop() const { return is_column_family_drop_; }
 
+  void MarkNoManifestWriteDummy() { is_no_manifest_write_dummy_ = true; }
+  bool IsNoManifestWriteDummy() const { return is_no_manifest_write_dummy_; }
+
   void MarkAtomicGroup(uint32_t remaining_entries) {
     is_in_atomic_group_ = true;
     remaining_entries_ = remaining_entries;
@@ -779,8 +809,9 @@ class VersionEdit {
   bool is_column_family_add_ = false;
   std::string column_family_name_;
 
-  bool is_in_atomic_group_ = false;
   uint32_t remaining_entries_ = 0;
+  bool is_in_atomic_group_ = false;
+  bool is_no_manifest_write_dummy_ = false;
 
   std::string full_history_ts_low_;
   bool persist_user_defined_timestamps_ = true;

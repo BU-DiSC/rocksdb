@@ -555,11 +555,11 @@ static std::unordered_map<std::string, OptionTypeInfo>
         {"preclude_last_level_data_seconds",
          {offsetof(struct MutableCFOptions, preclude_last_level_data_seconds),
           OptionType::kUInt64T, OptionVerificationType::kNormal,
-          OptionTypeFlags::kNone}},
+          OptionTypeFlags::kMutable}},
         {"preserve_internal_time_seconds",
          {offsetof(struct MutableCFOptions, preserve_internal_time_seconds),
           OptionType::kUInt64T, OptionVerificationType::kNormal,
-          OptionTypeFlags::kNone}},
+          OptionTypeFlags::kMutable}},
         {"bottommost_temperature",
          {0, OptionType::kTemperature, OptionVerificationType::kDeprecated,
           OptionTypeFlags::kMutable}},
@@ -734,6 +734,10 @@ static std::unordered_map<std::string, OptionTypeInfo>
           OptionTypeFlags::kNone}},
         {"force_consistency_checks",
          {offsetof(struct ImmutableCFOptions, force_consistency_checks),
+          OptionType::kBoolean, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"disallow_memtable_writes",
+         {offsetof(struct ImmutableCFOptions, disallow_memtable_writes),
           OptionType::kBoolean, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
         {"default_temperature",
@@ -998,6 +1002,7 @@ ImmutableCFOptions::ImmutableCFOptions(const ColumnFamilyOptions& cf_options)
       num_levels(cf_options.num_levels),
       optimize_filters_for_hits(cf_options.optimize_filters_for_hits),
       force_consistency_checks(cf_options.force_consistency_checks),
+      disallow_memtable_writes(cf_options.disallow_memtable_writes),
       default_temperature(cf_options.default_temperature),
       memtable_insert_with_hint_prefix_extractor(
           cf_options.memtable_insert_with_hint_prefix_extractor),
@@ -1043,9 +1048,9 @@ uint64_t MultiplyCheckOverflow(uint64_t op1, double op2) {
 // when level_compaction_dynamic_level_bytes is true and leveled compaction
 // is used, the base level is not always L1, so precomupted max_file_size can
 // no longer be used. Recompute file_size_for_level from base level.
-uint64_t MaxFileSizeForLevel(const MutableCFOptions& cf_options,
-    int level, CompactionStyle compaction_style, int base_level,
-    bool level_compaction_dynamic_level_bytes) {
+uint64_t MaxFileSizeForLevel(const MutableCFOptions& cf_options, int level,
+                             CompactionStyle compaction_style, int base_level,
+                             bool level_compaction_dynamic_level_bytes) {
   if (!level_compaction_dynamic_level_bytes || level < base_level ||
       compaction_style != kCompactionStyleLevel) {
     assert(level >= 0);

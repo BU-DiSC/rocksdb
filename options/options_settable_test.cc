@@ -342,6 +342,8 @@ TEST_F(OptionsSettableTest, DBOptionsAllFieldsSettable) {
       {offsetof(struct DBOptions, compaction_service),
        sizeof(std::shared_ptr<CompactionService>)},
       {offsetof(struct DBOptions, daily_offpeak_time_utc), sizeof(std::string)},
+      {offsetof(struct DBOptions, calculate_sst_write_lifetime_hint_set),
+       sizeof(CompactionStyleSet)},
   };
 
   char* options_ptr = new char[sizeof(DBOptions)];
@@ -406,6 +408,7 @@ TEST_F(OptionsSettableTest, DBOptionsAllFieldsSettable) {
                              "flush_verify_memtable_count=true;"
                              "compaction_verify_record_count=true;"
                              "track_and_verify_wals_in_manifest=true;"
+                             "track_and_verify_wals=true;"
                              "verify_sst_unique_id_in_manifest=true;"
                              "is_fd_close_on_exec=false;"
                              "bytes_per_sync=4295013613;"
@@ -429,7 +432,6 @@ TEST_F(OptionsSettableTest, DBOptionsAllFieldsSettable) {
                              "use_direct_reads=false;"
                              "use_direct_io_for_flush_and_compaction=false;"
                              "max_log_file_size=4607;"
-                             "random_access_max_buffer_size=1048576;"
                              "advise_random_on_open=true;"
                              "fail_if_options_file_error=false;"
                              "enable_pipelined_write=false;"
@@ -644,6 +646,7 @@ TEST_F(OptionsSettableTest, ColumnFamilyOptionsAllFieldsSettable) {
       "hard_pending_compaction_bytes_limit=0;"
       "disable_auto_compactions=false;"
       "report_bg_io_stats=true;"
+      "disallow_memtable_writes=true;"
       "ttl=60;"
       "periodic_compaction_seconds=3600;"
       "sample_for_compression=0;"

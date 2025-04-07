@@ -578,7 +578,7 @@ void FaultInjectionTestFS::ReadUnsynced(const std::string& fname,
                                         uint64_t offset, size_t n,
                                         Slice* result, char* scratch,
                                         int64_t* pos_at_last_sync) {
-  *result = Slice(scratch, 0);  // default empty result
+  *result = Slice(scratch, 0);      // default empty result
   assert(*pos_at_last_sync == -1);  // default "unknown"
 
   MutexLock l(&mutex_);
@@ -1412,6 +1412,7 @@ IOStatus FaultInjectionTestFS::MaybeInjectThreadLocalReadError(
       msg << "empty result";
       ctx->message = msg.str();
       ret_fault_injected = true;
+      ret = IOStatus::IOError(ctx->message);
     } else if (!direct_io && Random::GetTLSInstance()->OneIn(7) &&
                scratch != nullptr && result->data() == scratch) {
       assert(result);
@@ -1430,6 +1431,7 @@ IOStatus FaultInjectionTestFS::MaybeInjectThreadLocalReadError(
       msg << "corrupt last byte";
       ctx->message = msg.str();
       ret_fault_injected = true;
+      ret = IOStatus::IOError(ctx->message);
     } else {
       msg << "error result multiget single";
       ctx->message = msg.str();

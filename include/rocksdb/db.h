@@ -22,6 +22,7 @@
 #include "rocksdb/iterator.h"
 #include "rocksdb/listener.h"
 #include "rocksdb/metadata.h"
+#include "rocksdb/multi_scan.h"
 #include "rocksdb/options.h"
 #include "rocksdb/snapshot.h"
 #include "rocksdb/sst_file_writer.h"
@@ -32,11 +33,6 @@
 #include "rocksdb/utilities/table_properties_collectors.h"
 #include "rocksdb/version.h"
 #include "rocksdb/wide_columns.h"
-
-#ifdef _WIN32
-// Windows API macro interference
-#undef DeleteFile
-#endif
 
 #if defined(__GNUC__) || defined(__clang__)
 #define ROCKSDB_DEPRECATED_FUNC __attribute__((__deprecated__))
@@ -101,43 +97,6 @@ class ColumnFamilyHandle {
 static const int kMajorVersion = __ROCKSDB_MAJOR__;
 static const int kMinorVersion = __ROCKSDB_MINOR__;
 
-// A range of keys
-struct Range {
-  // In case of user_defined timestamp, if enabled, `start` and `limit` should
-  // point to key without timestamp part.
-  Slice start;
-  Slice limit;
-
-  Range() {}
-  Range(const Slice& s, const Slice& l) : start(s), limit(l) {}
-};
-
-struct RangePtr {
-  // In case of user_defined timestamp, if enabled, `start` and `limit` should
-  // point to key without timestamp part.
-  const Slice* start;
-  const Slice* limit;
-
-  RangePtr() : start(nullptr), limit(nullptr) {}
-  RangePtr(const Slice* s, const Slice* l) : start(s), limit(l) {}
-};
-
-// It is valid that files_checksums and files_checksum_func_names are both
-// empty (no checksum information is provided for ingestion). Otherwise,
-// their sizes should be the same as external_files. The file order should
-// be the same in three vectors and guaranteed by the caller.
-// Note that, we assume the temperatures of this batch of files to be
-// ingested are the same.
-struct IngestExternalFileArg {
-  ColumnFamilyHandle* column_family = nullptr;
-  std::vector<std::string> external_files;
-  IngestExternalFileOptions options;
-  std::vector<std::string> files_checksums;
-  std::vector<std::string> files_checksum_func_names;
-  // A hint as to the temperature for *reading* the files to be ingested.
-  Temperature file_temperature = Temperature::kUnknown;
-};
-
 struct GetMergeOperandsOptions {
   using ContinueCallback = std::function<bool(Slice)>;
 
@@ -184,7 +143,15 @@ class DB {
   //
   // Caller must delete *dbptr when it is no longer needed.
   static Status Open(const Options& options, const std::string& name,
-                     DB** dbptr);
+                     std::unique_ptr<DB>* dbptr);
+  // DEPRECATED: raw pointer variant
+  static Status Open(const Options& options, const std::string& name,
+                     DB** dbptr) {
+    std::unique_ptr<DB> smart_ptr;
+    Status s = Open(options, name, &smart_ptr);
+    *dbptr = smart_ptr.release();
+    return s;
+  }
 
   // Open DB with column families.
   // db_options specify database specific options
@@ -202,7 +169,17 @@ class DB {
   // DestroyColumnFamilyHandle() with all the handles.
   static Status Open(const DBOptions& db_options, const std::string& name,
                      const std::vector<ColumnFamilyDescriptor>& column_families,
-                     std::vector<ColumnFamilyHandle*>* handles, DB** dbptr);
+                     std::vector<ColumnFamilyHandle*>* handles,
+                     std::unique_ptr<DB>* dbptr);
+  // DEPRECATED: raw pointer variant
+  static Status Open(const DBOptions& db_options, const std::string& name,
+                     const std::vector<ColumnFamilyDescriptor>& column_families,
+                     std::vector<ColumnFamilyHandle*>* handles, DB** dbptr) {
+    std::unique_ptr<DB> smart_ptr;
+    Status s = Open(db_options, name, column_families, handles, &smart_ptr);
+    *dbptr = smart_ptr.release();
+    return s;
+  }
 
   // OpenForReadOnly() creates a Read-only instance that supports reads alone.
   //
@@ -219,8 +196,18 @@ class DB {
   // Open the database for read only.
   //
   static Status OpenForReadOnly(const Options& options, const std::string& name,
-                                DB** dbptr,
+                                std::unique_ptr<DB>* dbptr,
                                 bool error_if_wal_file_exists = false);
+  // DEPRECATED: raw pointer variant
+  static Status OpenForReadOnly(const Options& options, const std::string& name,
+                                DB** dbptr,
+                                bool error_if_wal_file_exists = false) {
+    std::unique_ptr<DB> smart_ptr;
+    Status s =
+        OpenForReadOnly(options, name, &smart_ptr, error_if_wal_file_exists);
+    *dbptr = smart_ptr.release();
+    return s;
+  }
 
   // Open the database for read only with column families.
   //
@@ -232,8 +219,20 @@ class DB {
   static Status OpenForReadOnly(
       const DBOptions& db_options, const std::string& name,
       const std::vector<ColumnFamilyDescriptor>& column_families,
-      std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
+      std::vector<ColumnFamilyHandle*>* handles, std::unique_ptr<DB>* dbptr,
       bool error_if_wal_file_exists = false);
+  // DEPRECATED: raw pointer variant
+  static Status OpenForReadOnly(
+      const DBOptions& db_options, const std::string& name,
+      const std::vector<ColumnFamilyDescriptor>& column_families,
+      std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
+      bool error_if_wal_file_exists = false) {
+    std::unique_ptr<DB> smart_ptr;
+    Status s = OpenForReadOnly(db_options, name, column_families, handles,
+                               &smart_ptr, error_if_wal_file_exists);
+    *dbptr = smart_ptr.release();
+    return s;
+  }
 
   // OpenAsSecondary() creates a secondary instance that supports read-only
   // operations and supports dynamic catch up with the primary (through a
@@ -259,8 +258,24 @@ class DB {
   // delete it after use.
   //
   // Return OK on success, non-OK on failures.
+  //
+  // WARNING: Secondary databases cannot read shared SST files that have been
+  // truncated in the primary database. To avoid compatibility issues, users
+  // should refrain from using features in the primary database that can cause
+  // truncation, such as setting `rate_bytes_per_sec > 0` and
+  // `bytes_max_delete_chunk > 0` when invoking RocksDB's implementation of
+  // `NewSstFileManager()`.
   static Status OpenAsSecondary(const Options& options, const std::string& name,
-                                const std::string& secondary_path, DB** dbptr);
+                                const std::string& secondary_path,
+                                std::unique_ptr<DB>* dbptr);
+  // DEPRECATED: raw pointer variant
+  static Status OpenAsSecondary(const Options& options, const std::string& name,
+                                const std::string& secondary_path, DB** dbptr) {
+    std::unique_ptr<DB> smart_ptr;
+    Status s = OpenAsSecondary(options, name, secondary_path, &smart_ptr);
+    *dbptr = smart_ptr.release();
+    return s;
+  }
 
   // Open DB as secondary instance with specified column families
   //
@@ -298,7 +313,19 @@ class DB {
       const DBOptions& db_options, const std::string& name,
       const std::string& secondary_path,
       const std::vector<ColumnFamilyDescriptor>& column_families,
-      std::vector<ColumnFamilyHandle*>* handles, DB** dbptr);
+      std::vector<ColumnFamilyHandle*>* handles, std::unique_ptr<DB>* dbptr);
+  // DEPRECATED: raw pointer variant
+  static Status OpenAsSecondary(
+      const DBOptions& db_options, const std::string& name,
+      const std::string& secondary_path,
+      const std::vector<ColumnFamilyDescriptor>& column_families,
+      std::vector<ColumnFamilyHandle*>* handles, DB** dbptr) {
+    std::unique_ptr<DB> smart_ptr;
+    Status s = OpenAsSecondary(db_options, name, secondary_path,
+                               column_families, handles, &smart_ptr);
+    *dbptr = smart_ptr.release();
+    return s;
+  }
 
   // EXPERIMENTAL
 
@@ -349,8 +376,20 @@ class DB {
   static Status OpenAndTrimHistory(
       const DBOptions& db_options, const std::string& dbname,
       const std::vector<ColumnFamilyDescriptor>& column_families,
-      std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
+      std::vector<ColumnFamilyHandle*>* handles, std::unique_ptr<DB>* dbptr,
       std::string trim_ts);
+  // DEPRECATED: raw pointer variant
+  static Status OpenAndTrimHistory(
+      const DBOptions& db_options, const std::string& dbname,
+      const std::vector<ColumnFamilyDescriptor>& column_families,
+      std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
+      std::string trim_ts) {
+    std::unique_ptr<DB> smart_ptr;
+    Status s = OpenAndTrimHistory(db_options, dbname, column_families, handles,
+                                  &smart_ptr, trim_ts);
+    *dbptr = smart_ptr.release();
+    return s;
+  }
 
   // Manually, synchronously attempt to resume DB writes after a write failure
   // to the underlying filesystem. See
@@ -578,7 +617,7 @@ class DB {
                        const Slice& /*key*/, const Slice& /*ts*/,
                        const Slice& /*value*/);
 
-  // Apply the specified updates to the database.
+  // Apply the specified updates atomically to the database.
   // If `updates` contains no update, WAL will still be synced if
   // options.sync=true.
   // Returns OK on success, non-OK on failure.
@@ -696,8 +735,9 @@ class DB {
   // Populates the `merge_operands` array with all the merge operands in the DB
   // for `key`, or a customizable suffix of merge operands when
   // `GetMergeOperandsOptions::continue_cb` is set. The `merge_operands` array
-  // will be populated in the order of insertion. The number of entries
-  // populated in `merge_operands` will be assigned to `*number_of_operands`.
+  // will be populated in the order of insertion (older insertions first). The
+  // number of entries populated in `merge_operands` will be assigned to
+  // `*number_of_operands`.
   //
   // If the number of merge operands to return for `key` is greater than
   // `merge_operands_options.expected_max_number_of_operands`,
@@ -712,6 +752,9 @@ class DB {
   // The caller should delete or `Reset()` the `merge_operands` entries when
   // they are no longer needed. All `merge_operands` entries must be destroyed
   // or `Reset()` before this DB is closed or destroyed.
+  // OK status is returned if any merge operand is found.
+  // NotFound status is returned if no merge operand is found.
+  // Error status is returned if there is an error.
   virtual Status GetMergeOperands(
       const ReadOptions& options, ColumnFamilyHandle* column_family,
       const Slice& key, PinnableSlice* merge_operands,
@@ -1031,6 +1074,18 @@ class DB {
       const ReadOptions& options,
       const std::vector<ColumnFamilyHandle*>& column_families) = 0;
 
+  // Get an iterator that scans multiple key ranges. The scan ranges should
+  // be in increasing order of start key. See multi_scan_iterator.h for more
+  // details.
+  virtual std::unique_ptr<MultiScan> NewMultiScan(
+      const ReadOptions& /*options*/, ColumnFamilyHandle* /*column_family*/,
+      const std::vector<ScanOptions>& /*scan_opts*/) {
+    std::unique_ptr<Iterator> iter(NewErrorIterator(Status::NotSupported()));
+    std::unique_ptr<MultiScan> ms_iter =
+        std::make_unique<MultiScan>(std::move(iter));
+    return ms_iter;
+  }
+
   // Return a handle to the current DB state.  Iterators created with
   // this handle will all observe a stable snapshot of the current DB
   // state.  The caller must call ReleaseSnapshot(result) when the
@@ -1141,6 +1196,10 @@ class DB {
     //  "rocksdb.num-running-compactions" - returns the number of currently
     //      running compactions.
     static const std::string kNumRunningCompactions;
+
+    //  "rocksdb.num-running-compaction-sorted-runs" - returns the number of
+    //  sorted runs being processed by currently running compactions.
+    static const std::string kNumRunningCompactionSortedRuns;
 
     //  "rocksdb.background-errors" - returns accumulated number of background
     //      errors.
@@ -1612,9 +1671,12 @@ class DB {
   virtual int NumberLevels(ColumnFamilyHandle* column_family) = 0;
   virtual int NumberLevels() { return NumberLevels(DefaultColumnFamily()); }
 
+  // DEPRECATED:
   // Maximum level to which a new compacted memtable is pushed if it
   // does not create overlap.
-  virtual int MaxMemCompactionLevel(ColumnFamilyHandle* column_family) = 0;
+  virtual int MaxMemCompactionLevel(ColumnFamilyHandle* /*column_family*/) {
+    return 0;
+  }
   virtual int MaxMemCompactionLevel() {
     return MaxMemCompactionLevel(DefaultColumnFamily());
   }
@@ -1767,21 +1829,6 @@ class DB {
       SequenceNumber seq_number, std::unique_ptr<TransactionLogIterator>* iter,
       const TransactionLogIterator::ReadOptions& read_options =
           TransactionLogIterator::ReadOptions()) = 0;
-
-// Windows API macro interference
-#undef DeleteFile
-  // WARNING: This API is planned for removal in RocksDB 7.0 since it does not
-  // operate at the proper level of abstraction for a key-value store, and its
-  // contract/restrictions are poorly documented. For example, it returns non-OK
-  // `Status` for non-bottommost files and files undergoing compaction. Since we
-  // do not plan to maintain it, the contract will likely remain underspecified
-  // until its removal. Any user is encouraged to read the implementation
-  // carefully and migrate away from it when possible.
-  //
-  // Delete the file name from the db directory and update the internal state to
-  // reflect that. Supports deletion of sst and log files only. 'name' must be
-  // path relative to the db directory. eg. 000001.sst, /archive/000003.log
-  virtual Status DeleteFile(std::string name) = 0;
 
   // Obtains a list of all live table (SST) files and how they fit into the
   // LSM-trees, such as column family, level, key range, etc.
@@ -2013,14 +2060,11 @@ class DB {
       ColumnFamilyHandle* column_family, const Range* range, std::size_t n,
       TablePropertiesCollection* props) = 0;
 
-  // Get the table properties of files per level.
-  virtual Status GetPropertiesOfTablesForLevels(
-      ColumnFamilyHandle* /* column_family */,
-      std::vector<
-          std::unique_ptr<TablePropertiesCollection>>* /* levels_props */) {
-    return Status::NotSupported(
-        "GetPropertiesOfTablesForLevels() is not implemented.");
-  }
+  // Get the table properties of files by level.
+  virtual Status GetPropertiesOfTablesByLevel(
+      ColumnFamilyHandle* column_family,
+      std::vector<std::unique_ptr<TablePropertiesCollection>>*
+          props_by_level) = 0;
 
   virtual Status SuggestCompactRange(ColumnFamilyHandle* /*column_family*/,
                                      const Slice* /*begin*/,

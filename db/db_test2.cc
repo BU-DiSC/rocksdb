@@ -135,7 +135,6 @@ TEST_F(DBTest2, PartitionedIndexUserToInternalKey) {
   }
 }
 
-
 class PrefixFullBloomWithReverseComparator
     : public DBTestBase,
       public ::testing::WithParamInterface<bool> {
@@ -1476,8 +1475,7 @@ TEST_P(PresetCompressionDictTest, Flush) {
     // TODO(ajkr): fix the below assertion to work with ZSTD. The expectation on
     // number of bytes needs to be adjusted in case the cached block is in
     // ZSTD's digested dictionary format.
-    if (compression_type_ != kZSTD &&
-        compression_type_ != kZSTDNotFinalCompression) {
+    if (compression_type_ != kZSTD) {
       // Although we limited buffering to `kBlockLen`, there may be up to two
       // blocks of data included in the dictionary since we only check limit
       // after each block is built.
@@ -1554,8 +1552,7 @@ TEST_P(PresetCompressionDictTest, CompactNonBottommost) {
     // TODO(ajkr): fix the below assertion to work with ZSTD. The expectation on
     // number of bytes needs to be adjusted in case the cached block is in
     // ZSTD's digested dictionary format.
-    if (compression_type_ != kZSTD &&
-        compression_type_ != kZSTDNotFinalCompression) {
+    if (compression_type_ != kZSTD) {
       // Although we limited buffering to `kBlockLen`, there may be up to two
       // blocks of data included in the dictionary since we only check limit
       // after each block is built.
@@ -1616,8 +1613,7 @@ TEST_P(PresetCompressionDictTest, CompactBottommost) {
   // TODO(ajkr): fix the below assertion to work with ZSTD. The expectation on
   // number of bytes needs to be adjusted in case the cached block is in ZSTD's
   // digested dictionary format.
-  if (compression_type_ != kZSTD &&
-      compression_type_ != kZSTDNotFinalCompression) {
+  if (compression_type_ != kZSTD) {
     // Although we limited buffering to `kBlockLen`, there may be up to two
     // blocks of data included in the dictionary since we only check limit after
     // each block is built.
@@ -1976,7 +1972,6 @@ TEST_F(DBTest2, CompactionStall) {
 
   ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
 }
-
 
 TEST_F(DBTest2, FirstSnapshotTest) {
   Options options;
@@ -3600,7 +3595,6 @@ TEST_F(DBTest2, OptimizeForSmallDB) {
   value.Reset();
 }
 
-
 TEST_F(DBTest2, IterRaceFlush1) {
   ASSERT_OK(Put("foo", "v1"));
 
@@ -4104,7 +4098,6 @@ TEST_F(DBTest2, ReadCallbackTest) {
   }
 }
 
-
 TEST_F(DBTest2, LiveFilesOmitObsoleteFiles) {
   // Regression test for race condition where an obsolete file is returned to
   // user as a "live file" but then deleted, all while file deletions are
@@ -4432,7 +4425,7 @@ TEST_F(DBTest2, TraceAndReplay) {
       db2->NewDefaultReplayer(handles, std::move(trace_reader), &replayer));
 
   TraceExecutionResultHandler res_handler;
-  std::function<void(Status, std::unique_ptr<TraceRecordResult> &&)> res_cb =
+  std::function<void(Status, std::unique_ptr<TraceRecordResult>&&)> res_cb =
       [&res_handler](Status exec_s, std::unique_ptr<TraceRecordResult>&& res) {
         ASSERT_TRUE(exec_s.ok() || exec_s.IsNotSupported());
         if (res != nullptr) {
@@ -5163,7 +5156,6 @@ TEST_F(DBTest2, TraceWithFilter) {
   // 4 WRITE + HEADER + FOOTER = 6
   ASSERT_EQ(count, 6);
 }
-
 
 TEST_F(DBTest2, PinnableSliceAndMmapReads) {
   Options options = CurrentOptions();
@@ -7693,7 +7685,6 @@ TEST_F(DBTest2, RecoverEpochNumber) {
   }
 }
 
-
 TEST_F(DBTest2, RenameDirectory) {
   Options options = CurrentOptions();
   DestroyAndReopen(options);
@@ -8006,7 +7997,7 @@ TEST_F(DBTest2, GetLatestSeqAndTsForKey) {
   ASSERT_EQ(0, options.statistics->getTickerCount(GET_HIT_L0));
 }
 
-#if defined(ZSTD_ADVANCED)
+#if defined(ZSTD)
 TEST_F(DBTest2, ZSTDChecksum) {
   // Verify that corruption during decompression is caught.
   Options options = CurrentOptions();

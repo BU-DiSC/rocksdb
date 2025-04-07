@@ -37,7 +37,6 @@ Status PromoteL0(DB* db, ColumnFamilyHandle* column_family, int target_level) {
   return db->PromoteL0(column_family, target_level);
 }
 
-
 Status SuggestCompactRange(DB* db, const Slice* begin, const Slice* end) {
   return SuggestCompactRange(db, db->DefaultColumnFamily(), begin, end);
 }
@@ -58,7 +57,8 @@ Status GetFileChecksumsFromCurrentManifest(FileSystem* fs,
   }
   assert(checksum_list);
 
-  const ReadOptions read_options(Env::IOActivity::kReadManifest);
+  const ReadOptions read_options(
+      Env::IOActivity::kGetFileChecksumsFromCurrentManifest);
   checksum_list->reset();
 
   std::unique_ptr<SequentialFileReader> file_reader;
@@ -75,7 +75,8 @@ Status GetFileChecksumsFromCurrentManifest(FileSystem* fs,
 
   struct LogReporter : public log::Reader::Reporter {
     Status* status_ptr;
-    void Corruption(size_t /*bytes*/, const Status& st) override {
+    void Corruption(size_t /*bytes*/, const Status& st,
+                    uint64_t /*log_number*/ = kMaxSequenceNumber) override {
       if (status_ptr->ok()) {
         *status_ptr = st;
       }

@@ -24,9 +24,16 @@ class SecondaryIndex;
 class TransactionDBMutexFactory;
 
 enum TxnDBWritePolicy {
-  WRITE_COMMITTED = 0,  // write only the committed data
-  WRITE_PREPARED,       // write data after the prepare phase of 2pc
-  WRITE_UNPREPARED      // write data before the prepare phase of 2pc
+  // Write data at transaction commit time
+  WRITE_COMMITTED = 0,
+
+  // EXPERIMENTAL: The remaining write policies are not as mature, well
+  // validated, nor as compatible with other features as WRITE_COMMITTED.
+
+  // Write data after the prepare phase of 2pc
+  WRITE_PREPARED,
+  // Write data before the prepare phase of 2pc
+  WRITE_UNPREPARED
 };
 
 constexpr uint32_t kInitialMaxDeadlocks = 5;
@@ -241,13 +248,21 @@ struct TransactionDBOptions {
   // user-defined timestamps so this option only applies in this case.
   bool enable_udt_validation = true;
 
-  //       / \     UNDER CONSTRUCTION
-  //      / ! \    UNDER CONSTRUCTION
-  //     /-----\   UNDER CONSTRUCTION
+  // EXPERIMENTAL
   //
   // The secondary indices to be maintained. See the SecondaryIndex interface
   // for more details.
   std::vector<std::shared_ptr<SecondaryIndex>> secondary_indices;
+
+  // EXPERIMENTAL, SUBJECT TO CHANGE
+  // This option is only valid for write committed. If the number of updates in
+  // a transaction exceeds this threshold, then the transaction commit will skip
+  // insertions into memtable as an optimization to reduce commit latency.
+  // See comment for TransactionOptions::commit_bypass_memtable for more detail.
+  // Setting TransactionOptions::commit_bypass_memtable to true takes precedence
+  // over this option.
+  uint32_t txn_commit_bypass_memtable_threshold =
+      std::numeric_limits<uint32_t>::max();
 
  private:
   // 128 entries
@@ -349,7 +364,7 @@ struct TransactionOptions {
   // DeleteRange, SingleDelete.
   bool write_batch_track_timestamp_size = false;
 
-  // EXPERIMENTAL
+  // EXPERIMENTAL, SUBJECT TO CHANGE
   // Only supports write-committed policy. If set to true, the transaction will
   // skip memtable write and ingest into the DB directly during Commit(). This
   // makes Commit() much faster for transactions with many operations.
@@ -364,6 +379,11 @@ struct TransactionOptions {
   // without indexing (e.g. added directly to the transaction underlying
   // write batch through Transaction::GetWriteBatch()->GetWriteBatch())
   // are not supported. They will not be applied to the DB.
+  //
+  // NOTE: since WBWI keep track of the most recent update per key, a Put
+  // followed by a SingleDelete will be written to DB as a SingleDelete. This
+  // can cause flush/compaction to report `num_single_del_mismatch` due to
+  // consecutive SingleDeletes.
   bool commit_bypass_memtable = false;
 };
 

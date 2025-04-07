@@ -64,6 +64,9 @@ enum CompactionPri : char {
 struct FileTemperatureAge {
   Temperature temperature = Temperature::kUnknown;
   uint64_t age = 0;
+#if __cplusplus >= 202002L
+  bool operator==(const FileTemperatureAge& rhs) const = default;
+#endif
 };
 
 struct CompactionOptionsFIFO {
@@ -116,6 +119,10 @@ struct CompactionOptionsFIFO {
   CompactionOptionsFIFO(uint64_t _max_table_files_size, bool _allow_compaction)
       : max_table_files_size(_max_table_files_size),
         allow_compaction(_allow_compaction) {}
+
+#if __cplusplus >= 202002L
+  bool operator==(const CompactionOptionsFIFO& rhs) const = default;
+#endif
 };
 
 // The control option of how the cache tiers will be used. Currently rocksdb
@@ -711,6 +718,17 @@ struct AdvancedColumnFamilyOptions {
   //
   // Dynamically changeable through SetOptions() API
   bool report_bg_io_stats = false;
+
+  // Setting this option to true disallows ordinary writes to the column family
+  // and it can only be populated through import and ingestion. It is intended
+  // to protect "ingestion only" column families. This option is not currently
+  // supported on the default column family because of error handling challenges
+  // analogous to https://github.com/facebook/rocksdb/issues/13429
+  //
+  // This option is not mutable with SetOptions(). It can be changed between
+  // DB::Open() calls, but open will fail if recovering WAL writes to a CF with
+  // this option set.
+  bool disallow_memtable_writes = false;
 
   // This option has different meanings for different compaction styles:
   //

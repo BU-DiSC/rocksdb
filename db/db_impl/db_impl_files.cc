@@ -159,6 +159,7 @@ void DBImpl::FindObsoleteFiles(JobContext* job_context, bool force,
 
   // Get obsolete files.  This function will also update the list of
   // pending files in VersionSet().
+  assert(versions_);
   versions_->GetObsoleteFiles(
       &job_context->sst_delete_files, &job_context->blob_delete_files,
       &job_context->manifest_delete_files, job_context->min_pending_output);
@@ -367,6 +368,7 @@ void DBImpl::DeleteObsoleteFileImpl(int job_id, const std::string& fname,
                                     FileType type, uint64_t number) {
   TEST_SYNC_POINT_CALLBACK("DBImpl::DeleteObsoleteFileImpl::BeforeDeletion",
                            const_cast<std::string*>(&fname));
+  IGNORE_STATUS_IF_ERROR(Status::IOError());
 
   Status file_deletion_status;
   if (type == kTableFile || type == kBlobFile || type == kWalFile) {
@@ -421,6 +423,8 @@ void DBImpl::PurgeObsoleteFiles(JobContext& state, bool schedule_only) {
 
   // FindObsoleteFiles() should've populated this so nonzero
   assert(state.manifest_file_number != 0);
+
+  IGNORE_STATUS_IF_ERROR(Status::IOError());
 
   // Now, convert lists to unordered sets, WITHOUT mutex held; set is slow.
   std::unordered_set<uint64_t> sst_live_set(state.sst_live.begin(),
@@ -1039,7 +1043,7 @@ std::set<std::string> DBImpl::CollectAllDBPaths() {
     all_db_paths.insert(NormalizePath(db_path.path));
   }
   for (const auto* cfd : *versions_->GetColumnFamilySet()) {
-    for (const auto& cf_path : cfd->ioptions()->cf_paths) {
+    for (const auto& cf_path : cfd->ioptions().cf_paths) {
       all_db_paths.insert(NormalizePath(cf_path.path));
     }
   }

@@ -162,6 +162,23 @@ class Directories {
   std::unique_ptr<FSDirectory> wal_dir_;
 };
 
+struct DBOpenLogRecordReadReporter : public log::Reader::Reporter {
+  Env* env;
+  Logger* info_log;
+  const char* fname;
+  Status* status;  // nullptr if immutable_db_options_.paranoid_checks==false
+  bool* old_log_record;
+  void Corruption(size_t bytes, const Status& s,
+                  uint64_t log_number = kMaxSequenceNumber) override;
+
+  void OldLogRecord(size_t bytes) override;
+
+  uint64_t GetCorruptedLogNumber() const { return corrupted_log_number_; }
+
+ private:
+  uint64_t corrupted_log_number_ = kMaxSequenceNumber;
+};
+
 // While DB is the public interface of RocksDB, and DBImpl is the actual
 // class implementing it. It's the entrance of the core RocksdB engine.
 // All other DB implementations, e.g. TransactionDB, BlobDB, etc, wrap a
@@ -362,6 +379,11 @@ class DBImpl : public DB {
                       const std::vector<ColumnFamilyHandle*>& column_families,
                       std::vector<Iterator*>* iterators) override;
 
+  using DB::NewMultiScan;
+  std::unique_ptr<MultiScan> NewMultiScan(
+      const ReadOptions& _read_options, ColumnFamilyHandle* column_family,
+      const std::vector<ScanOptions>& scan_opts) override;
+
   const Snapshot* GetSnapshot() override;
   void ReleaseSnapshot(const Snapshot* snapshot) override;
 
@@ -524,9 +546,8 @@ class DBImpl : public DB {
       SequenceNumber seq_number, std::unique_ptr<TransactionLogIterator>* iter,
       const TransactionLogIterator::ReadOptions& read_options =
           TransactionLogIterator::ReadOptions()) override;
-  Status DeleteFile(std::string name) override;
   Status DeleteFilesInRanges(ColumnFamilyHandle* column_family,
-                             const RangePtr* ranges, size_t n,
+                             const RangeOpt* ranges, size_t n,
                              bool include_end = true);
 
   void GetLiveFilesMetaData(std::vector<LiveFileMetaData>* metadata) override;
@@ -634,6 +655,11 @@ class DBImpl : public DB {
   Status GetPropertiesOfTablesInRange(
       ColumnFamilyHandle* column_family, const Range* range, std::size_t n,
       TablePropertiesCollection* props) override;
+
+  Status GetPropertiesOfTablesByLevel(
+      ColumnFamilyHandle* column_family,
+      std::vector<std::unique_ptr<TablePropertiesCollection>>* props_by_level)
+      override;
 
   // ---- End of implementations of the DB interface ----
   SystemClock* GetSystemClock() const;
@@ -939,13 +965,6 @@ class DBImpl : public DB {
     return num_running_flushes_;
   }
 
-  // Returns the number of currently running compactions.
-  // REQUIREMENT: mutex_ must be held when calling this function.
-  int num_running_compactions() {
-    mutex_.AssertHeld();
-    return num_running_compactions_;
-  }
-
   const WriteController& write_controller() { return write_controller_; }
 
   // hollow transactions shell used for recovery.
@@ -1081,9 +1100,10 @@ class DBImpl : public DB {
   // This is to be used only by internal rocksdb classes.
   static Status Open(const DBOptions& db_options, const std::string& name,
                      const std::vector<ColumnFamilyDescriptor>& column_families,
-                     std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
-                     const bool seq_per_batch, const bool batch_per_txn,
-                     const bool is_retry, bool* can_retry);
+                     std::vector<ColumnFamilyHandle*>* handles,
+                     std::unique_ptr<DB>* dbptr, const bool seq_per_batch,
+                     const bool batch_per_txn, const bool is_retry,
+                     bool* can_retry);
 
   static IOStatus CreateAndNewDirectory(
       FileSystem* fs, const std::string& dirname,
@@ -1257,27 +1277,18 @@ class DBImpl : public DB {
   // flush LOG out of application buffer
   void FlushInfoLog();
 
-  // record current sequence number to time mapping. If
-  // populate_historical_seconds > 0 then pre-populate all the
-  // sequence numbers from [1, last] to map to [now minus
-  // populate_historical_seconds, now].
-  void RecordSeqnoToTimeMapping(uint64_t populate_historical_seconds);
+  // For the background timer job
+  void RecordSeqnoToTimeMapping();
 
-  // Everytime DB's seqno to time mapping changed (which already hold the db
-  // mutex), we install a new SuperVersion in each column family with a shared
-  // copy of the new mapping while holding the db mutex.
-  // This is done for all column families even though the column family does not
-  // explicitly enabled the
-  // `preclude_last_level_data_seconds` or `preserve_internal_time_seconds`
-  // features.
-  // This mapping supports iterators to fulfill the
-  // "rocksdb.iterator.write-time" iterator property for entries in memtables.
-  //
-  // Since this new SuperVersion doesn't involve an LSM tree shape change, we
-  // don't schedule work after installing this SuperVersion. It returns the used
-  // `SuperVersionContext` for clean up after release mutex.
-  void InstallSeqnoToTimeMappingInSV(
-      std::vector<SuperVersionContext>* sv_contexts);
+  // REQUIRES: DB mutex held
+  std::pair<SequenceNumber, uint64_t> GetSeqnoToTimeSample() const;
+
+  // REQUIRES: DB mutex held or during open
+  void EnsureSeqnoToTimeMapping(const MinAndMaxPreserveSeconds& preserve_secs);
+
+  // Only called during open
+  void PrepopulateSeqnoToTimeMapping(
+      const MinAndMaxPreserveSeconds& preserve_secs);
 
   // Interface to block and signal the DB in case of stalling writes by
   // WriteBufferManager. Each DBImpl object contains ptr to WBMStallInterface.
@@ -1440,7 +1451,6 @@ class DBImpl : public DB {
         uint32_t size = static_cast<uint32_t>(map_.size());
         map_.emplace(cfd->GetID(), size);
         cfds_.emplace_back(cfd);
-        mutable_cf_opts_.emplace_back(cfd->GetLatestMutableCFOptions());
         edit_lists_.emplace_back(autovector<VersionEdit*>());
       }
       uint32_t i = map_[cfd->GetID()];
@@ -1449,7 +1459,6 @@ class DBImpl : public DB {
 
     std::unordered_map<uint32_t, uint32_t> map_;  // cf_id to index;
     autovector<ColumnFamilyData*> cfds_;
-    autovector<const MutableCFOptions*> mutable_cf_opts_;
     autovector<autovector<VersionEdit*>> edit_lists_;
     // All existing data files (SST files and Blob files) found during DB::Open.
     std::vector<std::string> existing_data_files_;
@@ -1777,6 +1786,13 @@ class DBImpl : public DB {
       if (writer->file()) {
         // TODO: plumb Env::IOActivity, Env::IOPriority
         s = writer->WriteBuffer(WriteOptions());
+        if (attempt_truncate_size < SIZE_MAX &&
+            attempt_truncate_size < writer->file()->GetFileSize()) {
+          Status s2 = writer->file()->writable_file()->Truncate(
+              attempt_truncate_size, IOOptions{}, nullptr);
+          // This is just a best effort attempt
+          s2.PermitUncheckedError();
+        }
       }
       delete writer;
       writer = nullptr;
@@ -1809,6 +1825,11 @@ class DBImpl : public DB {
       getting_synced = false;
     }
 
+    void SetAttemptTruncateSize(uint64_t size) {
+      assert(attempt_truncate_size == SIZE_MAX);
+      attempt_truncate_size = size;
+    }
+
     uint64_t number;
     // Visual Studio doesn't support deque's member to be noncopyable because
     // of a std::unique_ptr as a member.
@@ -1821,6 +1842,10 @@ class DBImpl : public DB {
     // to be persisted even if appends happen during sync so it can be used for
     // tracking the synced size in MANIFEST.
     uint64_t pre_sync_size = 0;
+    // When < SIZE_MAX, attempt to truncate the WAL to this size on close,
+    // because a bad entry was written to it beyond that point and it likely
+    // won't be recoverable with the bad entry.
+    uint64_t attempt_truncate_size = SIZE_MAX;
   };
 
   struct LogContext {
@@ -1830,6 +1855,7 @@ class DBImpl : public DB {
     bool need_log_dir_sync = false;
     log::Writer* writer = nullptr;
     LogFileNumberSize* log_file_number_size = nullptr;
+    uint64_t prev_size = SIZE_MAX;
   };
 
   // PurgeFileInfo is a structure to hold information of files to be deleted in
@@ -1910,8 +1936,8 @@ class DBImpl : public DB {
     const InternalKey* begin = nullptr;  // nullptr means beginning of key range
     const InternalKey* end = nullptr;    // nullptr means end of key range
     InternalKey* manual_end = nullptr;   // how far we are compacting
-    InternalKey tmp_storage;      // Used to keep track of compaction progress
-    InternalKey tmp_storage1;     // Used to keep track of compaction progress
+    InternalKey tmp_storage;   // Used to keep track of compaction progress
+    InternalKey tmp_storage1;  // Used to keep track of compaction progress
 
     // When the user provides a canceled pointer in CompactRangeOptions, the
     // above varaibe is the reference of the user-provided
@@ -1971,7 +1997,7 @@ class DBImpl : public DB {
 
   // Follow-up work to user creating a column family or (families)
   Status WrapUpCreateColumnFamilies(
-      const ReadOptions& read_options, const WriteOptions& write_options,
+      const WriteOptions& write_options,
       const std::vector<const ColumnFamilyOptions*>& cf_options);
 
   Status DropColumnFamilyImpl(ColumnFamilyHandle* column_family);
@@ -2043,6 +2069,99 @@ class DBImpl : public DB {
                          bool is_retry, bool* corrupted_log_found,
                          RecoveryContext* recovery_ctx);
 
+  void SetupLogFilesRecovery(
+      const std::vector<uint64_t>& wal_numbers,
+      std::unordered_map<int, VersionEdit>* version_edits, int* job_id,
+      uint64_t* min_wal_number);
+
+  Status ProcessLogFiles(const std::vector<uint64_t>& wal_numbers,
+                         bool read_only, bool is_retry, uint64_t min_wal_number,
+                         int job_id, SequenceNumber* next_sequence,
+                         std::unordered_map<int, VersionEdit>* version_edits,
+                         bool* corrupted_wal_found,
+                         RecoveryContext* recovery_ctx);
+
+  Status ProcessLogFile(
+      uint64_t wal_number, uint64_t min_wal_number, bool is_retry,
+      bool read_only, int job_id, SequenceNumber* next_sequence,
+      bool* stop_replay_for_corruption, bool* stop_replay_by_wal_filter,
+      uint64_t* corrupted_wal_number, bool* corrupted_wal_found,
+      std::unordered_map<int, VersionEdit>* version_edits, bool* flushed,
+      PredecessorWALInfo& predecessor_wal_info);
+
+  void SetupLogFileProcessing(uint64_t wal_number);
+
+  Status InitializeLogReader(uint64_t wal_number, bool is_retry,
+                             std::string& fname,
+
+                             bool stop_replay_for_corruption,
+                             uint64_t min_wal_number,
+                             const PredecessorWALInfo& predecessor_wal_info,
+                             bool* const old_log_record,
+                             Status* const reporter_status,
+                             DBOpenLogRecordReadReporter* reporter,
+                             std::unique_ptr<log::Reader>& reader);
+  Status ProcessLogRecord(
+      Slice record, const std::unique_ptr<log::Reader>& reader,
+      const UnorderedMap<uint32_t, size_t>& running_ts_sz, uint64_t wal_number,
+      const std::string& fname, bool read_only, int job_id,
+      const std::function<void()>& logFileDropped,
+      DBOpenLogRecordReadReporter* reporter, uint64_t* record_checksum,
+      SequenceNumber* last_seqno_observed, SequenceNumber* next_sequence,
+      bool* stop_replay_for_corruption, Status* status,
+      bool* stop_replay_by_wal_filter,
+      std::unordered_map<int, VersionEdit>* version_edits, bool* flushed);
+
+  Status InitializeWriteBatchForLogRecord(
+      Slice record, const std::unique_ptr<log::Reader>& reader,
+      const UnorderedMap<uint32_t, size_t>& running_ts_sz, WriteBatch* batch,
+      std::unique_ptr<WriteBatch>& new_batch, WriteBatch*& batch_to_use,
+      uint64_t* record_checksum);
+
+  void MaybeReviseStopReplayForCorruption(
+      SequenceNumber sequence, SequenceNumber const* const next_sequence,
+      bool* stop_replay_for_corruption);
+
+  Status InsertLogRecordToMemtable(WriteBatch* batch_to_use,
+                                   uint64_t wal_number,
+                                   SequenceNumber* next_sequence,
+                                   bool* has_valid_writes);
+
+  Status MaybeWriteLevel0TableForRecovery(
+      bool has_valid_writes, bool read_only, uint64_t wal_number, int job_id,
+      SequenceNumber const* const next_sequence,
+      std::unordered_map<int, VersionEdit>* version_edits, bool* flushed);
+
+  Status HandleNonOkStatusOrOldLogRecord(
+      uint64_t wal_number, SequenceNumber const* const next_sequence,
+      Status status, const DBOpenLogRecordReadReporter& reporter,
+      bool* old_log_record, bool* stop_replay_for_corruption,
+      uint64_t* corrupted_wal_number, bool* corrupted_wal_found);
+
+  Status UpdatePredecessorWALInfo(uint64_t wal_number,
+                                  const SequenceNumber last_seqno_observed,
+                                  const std::string& fname,
+                                  PredecessorWALInfo& predecessor_wal_info);
+
+  void FinishLogFileProcessing(const Status& status,
+                               const SequenceNumber* next_sequence);
+
+  // Return `Status::Corruption()` when `stop_replay_for_corruption == true` and
+  // exits inconsistency between SST and WAL data
+  Status MaybeHandleStopReplayForCorruptionForInconsistency(
+      bool stop_replay_for_corruption, uint64_t corrupted_wal_number);
+
+  Status MaybeFlushFinalMemtableOrRestoreActiveLogFiles(
+      const std::vector<uint64_t>& wal_numbers, bool read_only, int job_id,
+      bool flushed, std::unordered_map<int, VersionEdit>* version_edits,
+      RecoveryContext* recovery_ctx);
+
+  // Check that DB sequence number is not set back during recovery between
+  // replaying of WAL files and between replaying of WriteBatches.
+  Status CheckSeqnoNotSetBackDuringRecovery(SequenceNumber prev_next_seqno,
+                                            SequenceNumber current_next_seqno);
+
+  void FinishLogFilesRecovery(int job_id, const Status& status);
   // The following two methods are used to flush a memtable to
   // storage. The first one is used at database RecoveryTime (when the
   // database is opened) and is heavyweight because it holds the mutex
@@ -2222,7 +2341,8 @@ class DBImpl : public DB {
                       const WriteOptions& write_options,
                       log::Writer* log_writer, uint64_t* log_used,
                       uint64_t* log_size,
-                      LogFileNumberSize& log_file_number_size);
+                      LogFileNumberSize& log_file_number_size,
+                      SequenceNumber sequence);
 
   IOStatus WriteToWAL(const WriteThread::WriteGroup& write_group,
                       log::Writer* log_writer, uint64_t* log_used,
@@ -2246,7 +2366,7 @@ class DBImpl : public DB {
   void WALIOStatusCheck(const IOStatus& status);
 
   // Used by WriteImpl to update bg_error_ in case of memtable insert error.
-  void MemTableInsertStatusCheck(const Status& memtable_insert_status);
+  void HandleMemTableInsertFailure(const Status& nonok_memtable_insert_status);
 
   Status CompactFilesImpl(const CompactionOptions& compact_options,
                           ColumnFamilyData* cfd, Version* version,
@@ -2353,9 +2473,7 @@ class DBImpl : public DB {
   // Cancel scheduled periodic tasks
   Status CancelPeriodicTaskScheduler();
 
-  Status RegisterRecordSeqnoTimeWorker(const ReadOptions& read_options,
-                                       const WriteOptions& write_options,
-                                       bool is_new_db);
+  Status RegisterRecordSeqnoTimeWorker();
 
   void PrintStatistics();
 
@@ -2421,14 +2539,22 @@ class DBImpl : public DB {
 
   // Background threads call this function, which is just a wrapper around
   // the InstallSuperVersion() function. Background threads carry
-  // sv_context which can have new_superversion already
-  // allocated.
+  // sv_context to allow allocation of SuperVersion object outside of holding
+  // the DB mutex.
   // All ColumnFamily state changes go through this function. Here we analyze
   // the new state and we schedule background work if we detect that the new
   // state needs flush or compaction.
+  // See also InstallSuperVersionForConfigChange().
   void InstallSuperVersionAndScheduleWork(
       ColumnFamilyData* cfd, SuperVersionContext* sv_context,
-      const MutableCFOptions& mutable_cf_options);
+      std::optional<std::shared_ptr<SeqnoToTimeMapping>>
+          new_seqno_to_time_mapping = {});
+
+  // A variant of InstallSuperVersionAndScheduleWork() that must be used for
+  // new CFs or for changes to mutable_cf_options. This is so that it can
+  // update seqno_to_time_mapping cached for the new SuperVersion as relevant.
+  void InstallSuperVersionForConfigChange(ColumnFamilyData* cfd,
+                                          SuperVersionContext* sv_context);
 
   bool GetIntPropertyInternal(ColumnFamilyData* cfd,
                               const DBPropertyInfo& property_info,
@@ -2467,6 +2593,7 @@ class DBImpl : public DB {
 
   IOStatus CreateWAL(const WriteOptions& write_options, uint64_t log_file_num,
                      uint64_t recycle_log_number, size_t preallocate_block_size,
+                     const PredecessorWALInfo& predecessor_wal_info,
                      log::Writer** new_log);
 
   // Validate self-consistency of DB options

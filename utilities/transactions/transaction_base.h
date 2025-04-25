@@ -223,6 +223,8 @@ class TransactionBaseImpl : public Transaction {
 
   Status DeleteUntracked(ColumnFamilyHandle* column_family,
                          const Slice& key) override;
+  Status DeleteUntracked(ColumnFamilyHandle* column_family, const Slice& key,
+                         uint64_t dpt) override;
   Status DeleteUntracked(const Slice& key) override {
     return DeleteUntracked(nullptr, key);
   }
@@ -242,8 +244,7 @@ class TransactionBaseImpl : public Transaction {
 
   WriteBatchWithIndex* GetWriteBatch() override;
 
-  void SetLockTimeout(int64_t /*timeout*/) override { /* Do nothing */
-  }
+  void SetLockTimeout(int64_t /*timeout*/) override { /* Do nothing */ }
 
   const Snapshot* GetSnapshot() const override {
     // will return nullptr when there is no snapshot

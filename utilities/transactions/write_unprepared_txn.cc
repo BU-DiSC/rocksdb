@@ -155,6 +155,14 @@ Status WriteUnpreparedTxn::Delete(ColumnFamilyHandle* column_family,
 }
 
 Status WriteUnpreparedTxn::Delete(ColumnFamilyHandle* column_family,
+                                  const Slice& key, const bool assume_tracked,
+                                  uint64_t dpt) {
+  return HandleWrite([&]() {
+    return TransactionBaseImpl::Delete(column_family, key, assume_tracked, dpt);
+  });
+}
+
+Status WriteUnpreparedTxn::Delete(ColumnFamilyHandle* column_family,
                                   const SliceParts& key,
                                   const bool assume_tracked) {
   return HandleWrite([&]() {

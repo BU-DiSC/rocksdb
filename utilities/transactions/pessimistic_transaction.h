@@ -261,6 +261,8 @@ class WriteCommittedTxn : public PessimisticTransaction {
   using TransactionBaseImpl::DeleteUntracked;
   Status DeleteUntracked(ColumnFamilyHandle* column_family,
                          const Slice& key) override;
+  Status DeleteUntracked(ColumnFamilyHandle* column_family, const Slice& key,
+                         uint64_t dpt) override;
   Status DeleteUntracked(ColumnFamilyHandle* column_family,
                          const SliceParts& key) override;
 

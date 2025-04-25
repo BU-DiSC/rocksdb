@@ -53,6 +53,8 @@ class PessimisticTransactionDB : public TransactionDB {
   using StackableDB::Delete;
   Status Delete(const WriteOptions& wopts, ColumnFamilyHandle* column_family,
                 const Slice& key) override;
+  Status Delete(const WriteOptions& wopts, ColumnFamilyHandle* column_family,
+                const Slice& key, uint64_t dpt) override;
 
   using StackableDB::SingleDelete;
   Status SingleDelete(const WriteOptions& wopts,

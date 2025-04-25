@@ -209,6 +209,8 @@ class DBImpl : public DB {
   Status Delete(const WriteOptions& options, ColumnFamilyHandle* column_family,
                 const Slice& key) override;
   Status Delete(const WriteOptions& options, ColumnFamilyHandle* column_family,
+                const Slice& key, uint64_t dpt) override;
+  Status Delete(const WriteOptions& options, ColumnFamilyHandle* column_family,
                 const Slice& key, const Slice& ts) override;
 
   using DB::SingleDelete;
@@ -1804,8 +1806,8 @@ class DBImpl : public DB {
     const InternalKey* begin = nullptr;  // nullptr means beginning of key range
     const InternalKey* end = nullptr;    // nullptr means end of key range
     InternalKey* manual_end = nullptr;   // how far we are compacting
-    InternalKey tmp_storage;      // Used to keep track of compaction progress
-    InternalKey tmp_storage1;     // Used to keep track of compaction progress
+    InternalKey tmp_storage;   // Used to keep track of compaction progress
+    InternalKey tmp_storage1;  // Used to keep track of compaction progress
 
     // When the user provides a canceled pointer in CompactRangeOptions, the
     // above varaibe is the reference of the user-provided

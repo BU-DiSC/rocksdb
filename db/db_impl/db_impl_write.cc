@@ -93,6 +93,16 @@ Status DBImpl::Delete(const WriteOptions& write_options,
 
 Status DBImpl::Delete(const WriteOptions& write_options,
                       ColumnFamilyHandle* column_family, const Slice& key,
+                      uint64_t dpt) {
+  const Status s = FailIfCfHasTs(column_family);
+  if (!s.ok()) {
+    return s;
+  }
+  return DB::Delete(write_options, column_family, key, dpt);
+}
+
+Status DBImpl::Delete(const WriteOptions& write_options,
+                      ColumnFamilyHandle* column_family, const Slice& key,
                       const Slice& ts) {
   const Status s = FailIfTsMismatchCf(column_family, ts);
   if (!s.ok()) {
@@ -2460,6 +2470,17 @@ Status DB::Delete(const WriteOptions& opt, ColumnFamilyHandle* column_family,
   WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
                    opt.protection_bytes_per_key, 0 /* default_cf_ts_sz */);
   Status s = batch.Delete(column_family, key);
+  if (!s.ok()) {
+    return s;
+  }
+  return Write(opt, &batch);
+}
+
+Status DB::Delete(const WriteOptions& opt, ColumnFamilyHandle* column_family,
+                  const Slice& key, uint64_t dpt) {
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key, 0 /* default_cf_ts_sz */);
+  Status s = batch.Delete(column_family, key, dpt);
   if (!s.ok()) {
     return s;
   }

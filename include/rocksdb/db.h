@@ -464,9 +464,16 @@ class DB {
                         const Slice& key) = 0;
   virtual Status Delete(const WriteOptions& options,
                         ColumnFamilyHandle* column_family, const Slice& key,
+                        uint64_t dpt) = 0;
+  virtual Status Delete(const WriteOptions& options,
+                        ColumnFamilyHandle* column_family, const Slice& key,
                         const Slice& ts) = 0;
   virtual Status Delete(const WriteOptions& options, const Slice& key) {
     return Delete(options, DefaultColumnFamily(), key);
+  }
+  virtual Status Delete(const WriteOptions& options, const Slice& key,
+                        uint64_t dpt) {
+    return Delete(options, DefaultColumnFamily(), key, dpt);
   }
   virtual Status Delete(const WriteOptions& options, const Slice& key,
                         const Slice& ts) {

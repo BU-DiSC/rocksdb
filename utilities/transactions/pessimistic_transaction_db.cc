@@ -548,6 +548,31 @@ Status PessimisticTransactionDB::Delete(const WriteOptions& wopts,
   return s;
 }
 
+Status PessimisticTransactionDB::Delete(const WriteOptions& wopts,
+                                        ColumnFamilyHandle* column_family,
+                                        const Slice& key, uint64_t dpt) {
+  Status s = FailIfCfEnablesTs(this, column_family);
+  if (!s.ok()) {
+    return s;
+  }
+
+  Transaction* txn = BeginInternalTransaction(wopts);
+  txn->DisableIndexing();
+
+  // Since the client didn't create a transaction, they don't care about
+  // conflict checking for this write.  So we just need to do
+  // DeleteUntracked().
+  s = txn->DeleteUntracked(column_family, key, dpt);
+
+  if (s.ok()) {
+    s = txn->Commit();
+  }
+
+  delete txn;
+
+  return s;
+}
+
 Status PessimisticTransactionDB::SingleDelete(const WriteOptions& wopts,
                                               ColumnFamilyHandle* column_family,
                                               const Slice& key) {

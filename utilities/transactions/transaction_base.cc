@@ -520,8 +520,7 @@ Status TransactionBaseImpl::Delete(ColumnFamilyHandle* column_family,
 }
 
 Status TransactionBaseImpl::Delete(ColumnFamilyHandle* column_family,
-                                   const Slice& key,
-                                   const bool assume_tracked,
+                                   const Slice& key, const bool assume_tracked,
                                    uint64_t dpt) {
   ROCKS_LOG_INFO(dbimpl_->immutable_db_options().info_log,
                  "(FADE) TransactionBaseImpl::Delete with DPT: %ld", dpt);
@@ -648,6 +647,24 @@ Status TransactionBaseImpl::DeleteUntracked(ColumnFamilyHandle* column_family,
 
   if (s.ok()) {
     s = GetBatchForWrite()->Delete(column_family, key);
+    if (s.ok()) {
+      num_deletes_++;
+    }
+  }
+
+  return s;
+}
+
+Status TransactionBaseImpl::DeleteUntracked(ColumnFamilyHandle* column_family,
+                                            const Slice& key, uint64_t dpt) {
+  ROCKS_LOG_INFO(dbimpl_->immutable_db_options().info_log,
+                 "(FADE) TransactionBaseImpl::DeleteUntracked with DPT: %ld",
+                 dpt);
+
+  Status s = TryLock(column_family, key, false /* read_only */,
+                     true /* exclusive */, false /* do_validate */);
+  if (s.ok()) {
+    s = GetBatchForWrite()->Delete(column_family, key, dpt);
     if (s.ok()) {
       num_deletes_++;
     }

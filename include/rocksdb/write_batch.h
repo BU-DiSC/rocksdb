@@ -281,8 +281,21 @@ class WriteBatch : public WriteBatchBase {
       return Status::InvalidArgument(
           "non-default column family and DeleteCF not implemented");
     }
+
+    virtual Status DeleteCFWithValue(uint32_t column_family_id,
+                                     const Slice& key, const Slice& value) {
+      if (column_family_id == 0) {
+        DeleteWithValue(key, value);
+        return Status::OK();
+      }
+      return Status::InvalidArgument(
+          "non-default column family and DeleteCF not implemented");
+    }
+
     // If user-defined timestamp is enabled, then `key` includes timestamp.
     virtual void Delete(const Slice& /*key*/) {}
+    virtual void DeleteWithValue(const Slice& /*key*/, const Slice& /*value*/) {
+    }
 
     // If user-defined timestamp is enabled, then `key` includes timestamp.
     virtual Status SingleDeleteCF(uint32_t column_family_id, const Slice& key) {

@@ -130,6 +130,8 @@ class WriteUnpreparedTxn : public WritePreparedTxn {
   using TransactionBaseImpl::Delete;
   Status Delete(ColumnFamilyHandle* column_family, const Slice& key,
                 const bool assume_tracked = false) override;
+  Status Delete(ColumnFamilyHandle* column_family, const Slice& key,
+                const bool assume_tracked, uint64_t dpt) override;
   Status Delete(ColumnFamilyHandle* column_family, const SliceParts& key,
                 const bool assume_tracked = false) override;
 

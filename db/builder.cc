@@ -244,15 +244,14 @@ Status BuildTable(
         uint64_t tombstone_time;
         uint64_t tombstone_dpt;
         std::tie(unpacked_value, tombstone_time) =
-            ParsePackedValueWithDPT(value);
+            ParsePackedValueWithWriteTime(value);
         std::tie(unpacked_value, tombstone_dpt) =
             ParsePackedValueWithDPT(unpacked_value);
         if (tombstone_dpt > 0) {
-          ROCKS_LOG_INFO(
-              db_options.info_log,
-              "(FADE) BuildTable: tombstone with DPT found: "
-              "key=%s, DPT=%lu",
-              key.ToString().c_str(), tombstone_dpt);
+          ROCKS_LOG_INFO(db_options.info_log,
+                         "(FADE) BuildTable: tombstone with DPT found: "
+                         "key=%s, created_time=%lu, DPT=%lu",
+                         ikey.user_key.data(), tombstone_time, tombstone_dpt);
         }
         min_expiration_time = std::min(
             min_expiration_time,

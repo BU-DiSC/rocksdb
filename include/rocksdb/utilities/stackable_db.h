@@ -213,6 +213,10 @@ class StackableDB : public DB {
                 const Slice& key, const Slice& ts) override {
     return db_->Delete(wopts, column_family, key, ts);
   }
+    Status Delete(const WriteOptions& wopts, ColumnFamilyHandle* column_family,
+                const Slice& key, uint64_t dpt) override {
+    return db_->Delete(wopts, column_family, key, dpt);
+  }
 
   using DB::SingleDelete;
   Status SingleDelete(const WriteOptions& wopts,

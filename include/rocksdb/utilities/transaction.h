@@ -536,6 +536,8 @@ class Transaction {
 
   virtual Status DeleteUntracked(ColumnFamilyHandle* column_family,
                                  const Slice& key) = 0;
+  virtual Status DeleteUntracked(ColumnFamilyHandle* column_family,
+                                 const Slice& key, uint64_t dpt) = 0;
 
   virtual Status DeleteUntracked(const Slice& key) = 0;
   virtual Status DeleteUntracked(ColumnFamilyHandle* column_family,

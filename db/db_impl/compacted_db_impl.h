@@ -67,6 +67,11 @@ class CompactedDBImpl : public DBImpl {
                 const Slice& /*key*/) override {
     return Status::NotSupported("Not supported in compacted db mode.");
   }
+  Status Delete(const WriteOptions& /*options*/,
+                ColumnFamilyHandle* /*column_family*/,
+                const Slice& /*key*/, uint64_t /*dpt*/) override {
+    return Status::NotSupported("Not supported operation in compacted db mode.");
+  }
   Status Write(const WriteOptions& /*options*/,
                WriteBatch* /*updates*/) override {
     return Status::NotSupported("Not supported in compacted db mode.");

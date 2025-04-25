@@ -583,7 +583,7 @@ Status WriteBatchInternal::Iterate(const WriteBatch* wb,
       case kTypeDeletion:
         assert(wb->content_flags_.load(std::memory_order_relaxed) &
                (ContentFlags::DEFERRED | ContentFlags::HAS_DELETE));
-        s = handler->DeleteCF(column_family, key);
+        s = handler->DeleteCFWithValue(column_family, key, value);
         if (LIKELY(s.ok())) {
           empty_batch = false;
           found++;
@@ -1208,7 +1208,7 @@ Status WriteBatchInternal::MarkRollback(WriteBatch* b, const Slice& xid) {
 }
 
 Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
-                                  const Slice& key) {
+                                  const Slice& key, const Slice& value) {
   LocalSavePoint save(b);
   WriteBatchInternal::SetCount(b, WriteBatchInternal::Count(b) + 1);
   std::string empty_value;
@@ -1219,9 +1219,13 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     PutVarint32(&b->rep_, column_family_id);
   }
   PutLengthPrefixedSlice(&b->rep_, key);
-  PutFixed64(&empty_value, 0);
-  PutFixed64(&empty_value, 0);
-  PutLengthPrefixedSlice(&b->rep_, empty_value);
+  if (!value.empty()) {
+    PutLengthPrefixedSlice(&b->rep_, value);
+  } else {
+    PutFixed64(&empty_value, 0);  // dpt
+    PutFixed64(&empty_value, 0);  // current time
+    PutLengthPrefixedSlice(&b->rep_, empty_value);
+  }
   b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
                               ContentFlags::HAS_DELETE,
                           std::memory_order_relaxed);
@@ -1329,8 +1333,8 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     PutVarint32(&b->rep_, column_family_id);
   }
   PutLengthPrefixedSliceParts(&b->rep_, key);
-  PutFixed64(&empty_value, 0);
-  PutFixed64(&empty_value, 0);
+  PutFixed64(&empty_value, 0);  // dpt
+  PutFixed64(&empty_value, 0);  // current time
   PutLengthPrefixedSlice(&b->rep_, empty_value);
   b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
                               ContentFlags::HAS_DELETE,
@@ -2418,11 +2422,17 @@ class MemTableInserter : public WriteBatch::Handler {
   }
 
   Status DeleteCF(uint32_t column_family_id, const Slice& key) override {
+    return DeleteCFWithValue(column_family_id, key, "");
+  }
+
+  Status DeleteCFWithValue(uint32_t column_family_id, const Slice& key,
+                           const Slice& value) override {
     const auto* kv_prot_info = NextProtectionInfo();
     // optimize for non-recovery mode
     if (UNLIKELY(write_after_commit_ && rebuilding_trx_ != nullptr)) {
       // TODO(ajkr): propagate `ProtectionInfoKVOS64`.
-      return WriteBatchInternal::Delete(rebuilding_trx_, column_family_id, key);
+      return WriteBatchInternal::Delete(rebuilding_trx_, column_family_id, key,
+                                        value);
       // else insert the values to the memtable right away
     }
 
@@ -2433,8 +2443,8 @@ class MemTableInserter : public WriteBatch::Handler {
         // The CF is probably flushed and hence no need for insert but we still
         // need to keep track of the keys for upcoming rollback/commit.
         // TODO(ajkr): propagate `ProtectionInfoKVOS64`.
-        ret_status =
-            WriteBatchInternal::Delete(rebuilding_trx_, column_family_id, key);
+        ret_status = WriteBatchInternal::Delete(rebuilding_trx_,
+                                                column_family_id, key, value);
         if (ret_status.ok()) {
           MaybeAdvanceSeq(IsDuplicateKeySeq(column_family_id, key));
         }
@@ -2458,10 +2468,10 @@ class MemTableInserter : public WriteBatch::Handler {
       auto mem_kv_prot_info =
           kv_prot_info->StripC(column_family_id).ProtectS(sequence_);
       mem_kv_prot_info.UpdateO(kTypeDeletion, delete_type);
-      ret_status = DeleteImpl(column_family_id, key, Slice(), delete_type,
+      ret_status = DeleteImpl(column_family_id, key, value, delete_type,
                               &mem_kv_prot_info);
     } else {
-      ret_status = DeleteImpl(column_family_id, key, Slice(), delete_type,
+      ret_status = DeleteImpl(column_family_id, key, value, delete_type,
                               nullptr /* kv_prot_info */);
     }
     // optimize for non-recovery mode
@@ -2472,8 +2482,8 @@ class MemTableInserter : public WriteBatch::Handler {
     if (UNLIKELY(ret_status.ok() && rebuilding_trx_ != nullptr)) {
       assert(!write_after_commit_);
       // TODO(ajkr): propagate `ProtectionInfoKVOS64`.
-      ret_status =
-          WriteBatchInternal::Delete(rebuilding_trx_, column_family_id, key);
+      ret_status = WriteBatchInternal::Delete(rebuilding_trx_, column_family_id,
+                                              key, value);
     }
     if (UNLIKELY(ret_status.IsTryAgain())) {
       DecrementProtectionInfoIdxForTryAgain();
@@ -3230,8 +3240,9 @@ class ProtectionInfoUpdater : public WriteBatch::Handler {
     return UpdateProtInfo(cf, key, entity, kTypeWideColumnEntity);
   }
 
-  Status DeleteCF(uint32_t cf, const Slice& key) override {
-    return UpdateProtInfo(cf, key, "", kTypeDeletion);
+  Status DeleteCFWithValue(uint32_t cf, const Slice& key,
+                           const Slice& value) override {
+    return UpdateProtInfo(cf, key, value, kTypeDeletion);
   }
 
   Status SingleDeleteCF(uint32_t cf, const Slice& key) override {

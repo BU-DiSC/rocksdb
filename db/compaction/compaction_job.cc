@@ -1354,9 +1354,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         ROCKS_LOG_INFO(db_options_.info_log,
                        "(FADE) CompactionJob::ProcessKeyValueCompaction: "
                        "tombstone with DPT found: "
-                       "key=%s, tombstone_time=%lu , DPT=%lu, to level %d",
-                       c_iter->user_key().ToString().c_str(), tombstone_time,
-                       tombstone_dpt, sub_compact->compaction->output_level());
+                       "key=%s, created_time=%lu , DPT=%lu",
+                       c_iter->user_key().data(), tombstone_time,
+                       tombstone_dpt);
       }
       min_expiration_time = std::min(
           min_expiration_time,
@@ -1412,8 +1412,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       min_expiration_time;
   ROCKS_LOG_INFO(db_options_.info_log,
                  "(FADE) CompactionJob::ProcessKeyValueCompaction: "
-                 "file expiration time = %lu",
-                 min_expiration_time);
+                 "file expiration time = %lu to level %d",
+                 min_expiration_time, sub_compact->compaction->output_level());
 
   // This number may not be accurate when CompactionIterator was created
   // with `must_count_input_entries=false`.

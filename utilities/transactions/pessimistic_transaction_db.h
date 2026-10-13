@@ -50,6 +50,20 @@ class PessimisticTransactionDB : public TransactionDB {
   Status Put(const WriteOptions& options, ColumnFamilyHandle* column_family,
              const Slice& key, const Slice& val) override;
 
+  Status PutEntity(const WriteOptions& options,
+                   ColumnFamilyHandle* column_family, const Slice& key,
+                   const WideColumns& columns) override;
+  Status PutEntity(const WriteOptions& /* options */, const Slice& /* key */,
+                   const AttributeGroups& attribute_groups) override {
+    if (attribute_groups.empty()) {
+      return Status::InvalidArgument(
+          "Cannot call this method without attribute groups");
+    }
+    return Status::NotSupported(
+        "PutEntity with AttributeGroups not supported by "
+        "PessimisticTransactionDB");
+  }
+
   using StackableDB::Delete;
   Status Delete(const WriteOptions& wopts, ColumnFamilyHandle* column_family,
                 const Slice& key) override;
@@ -108,6 +122,23 @@ class PessimisticTransactionDB : public TransactionDB {
       const std::vector<ColumnFamilyDescriptor>& column_families,
       std::vector<ColumnFamilyHandle*>* handles) override;
 
+  using StackableDB::CreateColumnFamilyWithImport;
+  Status CreateColumnFamilyWithImport(
+      const ColumnFamilyOptions& options, const std::string& column_family_name,
+      const ImportColumnFamilyOptions& import_options,
+      const ExportImportFilesMetaData& metadata,
+      ColumnFamilyHandle** handle) override {
+    const std::vector<const ExportImportFilesMetaData*>& metadatas{&metadata};
+    return CreateColumnFamilyWithImport(options, column_family_name,
+                                        import_options, metadatas, handle);
+  }
+
+  Status CreateColumnFamilyWithImport(
+      const ColumnFamilyOptions& options, const std::string& column_family_name,
+      const ImportColumnFamilyOptions& import_options,
+      const std::vector<const ExportImportFilesMetaData*>& metadatas,
+      ColumnFamilyHandle** handle) override;
+
   using StackableDB::DropColumnFamily;
   Status DropColumnFamily(ColumnFamilyHandle* column_family) override;
 
@@ -144,7 +175,7 @@ class PessimisticTransactionDB : public TransactionDB {
 
   Transaction* GetTransactionByName(const TransactionName& name) override;
 
-  void RegisterTransaction(Transaction* txn);
+  Status RegisterTransaction(Transaction* txn);
   void UnregisterTransaction(Transaction* txn);
 
   // not thread safe. current use case is during recovery (single thread)
@@ -210,6 +241,7 @@ class PessimisticTransactionDB : public TransactionDB {
   friend class WriteUnpreparedTransactionTest_MarkLogWithPrepSection_Test;
 
   Transaction* BeginInternalTransaction(const WriteOptions& options);
+  Transaction* GetTransactionByNameLocked(const TransactionName& name);
 
   std::shared_ptr<LockManager> lock_manager_;
 

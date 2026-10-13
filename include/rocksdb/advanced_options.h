@@ -62,21 +62,10 @@ enum CompactionPri : char {
   kFADE = 0x5,
 };
 
-// Temperature of a file. Used to pass to FileSystem for a different
-// placement and/or coding.
-// Reserve some numbers in the middle, in case we need to insert new tier
-// there.
-enum class Temperature : uint8_t {
-  kUnknown = 0,
-  kHot = 0x04,
-  kWarm = 0x08,
-  kCold = 0x0C,
-  kLastTemperature,
-};
-
 struct FileTemperatureAge {
   Temperature temperature = Temperature::kUnknown;
   uint64_t age = 0;
+  bool operator==(const FileTemperatureAge& rhs) const = default;
 };
 
 struct CompactionOptionsFIFO {
@@ -102,7 +91,10 @@ struct CompactionOptionsFIFO {
   // Age (in seconds) threshold for different file temperatures.
   // When not empty, each element specifies an age threshold `age` and a
   // temperature such that if all the data in a file is older than `age`,
-  // RocksDB will compact the file to the specified `temperature`.
+  // RocksDB will compact the file to the specified `temperature`. Oldest file
+  // will be considered first. Only one file is compacted at a time,
+  // so multiple files qualifying to be compacted to be same temperature
+  // won't be merged together.
   //
   // Note:
   // - Flushed files will always have temperature kUnknown.
@@ -122,10 +114,27 @@ struct CompactionOptionsFIFO {
   // Default: empty
   std::vector<FileTemperatureAge> file_temperature_age_thresholds{};
 
+  // EXPERIMENTAL
+  // If true, when compaction is picked for kChangeTemperature reason,
+  // allow the trivia copy of the sst file from source FileSystem to
+  // destination FileSystem. If false, the changeTemperature will be
+  // the non-trivial copy by iterating/appending blocks by blocks of the
+  // sst file.
+  bool allow_trivial_copy_when_change_temperature = false;
+
+  // EXPERIMENTAL
+  // If 'allow_trivia_copy_op_when_change_temperature=true', the tmp buffer size
+  // to copy the file from the source FileSystem to the destnation FileSystem.
+  // If 'allow_trivia_copy_op_when_change_temperature=false', this field will
+  // not be used. The minmum buffer size must be at least 4KiB
+  uint64_t trivial_copy_buffer_size = 4096;
+
   CompactionOptionsFIFO() : max_table_files_size(1 * 1024 * 1024 * 1024) {}
   CompactionOptionsFIFO(uint64_t _max_table_files_size, bool _allow_compaction)
       : max_table_files_size(_max_table_files_size),
         allow_compaction(_allow_compaction) {}
+
+  bool operator==(const CompactionOptionsFIFO& rhs) const = default;
 };
 
 // The control option of how the cache tiers will be used. Currently rocksdb
@@ -147,6 +156,61 @@ enum class PrepopulateBlobCache : uint8_t {
   kDisable = 0x0,    // Disable prepopulate blob cache
   kFlushOnly = 0x1,  // Prepopulate blobs during flush only
 };
+
+// Bitmask enum for verify output flags during compaction.
+// This allows fine-grained control over what verification is performed
+// on compaction output files and when it's enabled.
+enum class VerifyOutputFlags : uint32_t {
+  kVerifyNone = 0x0,  // No verification
+
+  // First set of bits: type of verifications
+  kVerifyBlockChecksum = 1 << 0,  // Verify block checksums
+  kVerifyIteration = 1 << 1,      // Verify iteration and full key/value hash
+                                  // by comparing the one inserted into a
+                                  // file, and what is read back.
+
+  // TODO - Implement
+  // kVerifyFileChecksum = 1 << 2,   // Verify file-level checksum
+
+  // Second set of bits: when to enable verification
+  kEnableForLocalCompaction = 1 << 10,   // Enable for local compaction
+  kEnableForRemoteCompaction = 1 << 11,  // Enable for remote compaction
+
+  // TODO - Implement
+  // kEnableForFlush = 1 << 12,  // Enable for flush
+
+  kVerifyAll = 0xFFFFFFFF,
+};
+
+inline VerifyOutputFlags operator|(VerifyOutputFlags lhs,
+                                   VerifyOutputFlags rhs) {
+  using T = std::underlying_type_t<VerifyOutputFlags>;
+  return static_cast<VerifyOutputFlags>(static_cast<T>(lhs) |
+                                        static_cast<T>(rhs));
+}
+
+inline VerifyOutputFlags& operator|=(VerifyOutputFlags& lhs,
+                                     VerifyOutputFlags rhs) {
+  lhs = lhs | rhs;
+  return lhs;
+}
+
+inline VerifyOutputFlags operator&(VerifyOutputFlags lhs,
+                                   VerifyOutputFlags rhs) {
+  using T = std::underlying_type_t<VerifyOutputFlags>;
+  return static_cast<VerifyOutputFlags>(static_cast<T>(lhs) &
+                                        static_cast<T>(rhs));
+}
+
+inline VerifyOutputFlags& operator&=(VerifyOutputFlags& lhs,
+                                     VerifyOutputFlags rhs) {
+  lhs = lhs & rhs;
+  return lhs;
+}
+
+inline bool operator!(VerifyOutputFlags flag) {
+  return flag == VerifyOutputFlags::kVerifyNone;
+}
 
 struct AdvancedColumnFamilyOptions {
   // The maximum number of write buffers that are built up in memory.
@@ -173,15 +237,6 @@ struct AdvancedColumnFamilyOptions {
   // option will be sanitized to 1.
   // Default: 1
   int min_write_buffer_number_to_merge = 1;
-
-  // DEPRECATED
-  // The total maximum number of write buffers to maintain in memory including
-  // copies of buffers that have already been flushed.  Unlike
-  // max_write_buffer_number, this parameter does not affect flushing.
-  // This parameter is being replaced by max_write_buffer_size_to_maintain.
-  // If both parameters are set to non-zero values, this parameter will be
-  // ignored.
-  int max_write_buffer_number_to_maintain = 0;
 
   // The target number of write history bytes to hold in memory. Write history
   // comprises the latest write buffers (memtables). To reach the target, write
@@ -230,11 +285,18 @@ struct AdvancedColumnFamilyOptions {
   // if it is not explicitly set by the user.  Otherwise, the default is 0.
   int64_t max_write_buffer_size_to_maintain = 0;
 
-  // Allows thread-safe inplace updates. If this is true, there is no way to
+  // Allows thread-safe inplace updates.
+  //
+  // If this is true, there is no way to
   // achieve point-in-time consistency using snapshot or iterator (assuming
   // concurrent updates). Hence iterator and multi-get will return results
   // which are not consistent as of any point-in-time.
+  //
   // Backward iteration on memtables will not work either.
+  //
+  // It is intended to work or be compatible with a limited set of features:
+  // (1) Non-snapshot Get()
+  //
   // If inplace_callback function is not set,
   //   Put(key, new_value) will update inplace the existing_value iff
   //   * key exists in current memtable
@@ -467,6 +529,17 @@ struct AdvancedColumnFamilyOptions {
   // Dynamically changeable through SetOptions() API
   int target_file_size_multiplier = 1;
 
+  // If true, RocksDB will consider the estimated tail size (filter + index +
+  // meta blocks) when deciding whether to cut a compaction output file. This
+  // helps prevent output files from exceeding the target_file_size_base due to
+  // large tail blocks. When disabled, only the data block size is considered,
+  // which may result in SST files exceeding the target_file_size_base.
+  //
+  // Default: false
+  //
+  // Dynamically changeable through SetOptions() API
+  bool target_file_size_is_upper_bound = false;
+
   // If true, RocksDB will pick target size of each level dynamically.
   // We will pick a base level b >= 1. L0 will be directly merged into level b,
   // instead of always into level 1. Level 1 to b-1 need to be empty.
@@ -516,7 +589,7 @@ struct AdvancedColumnFamilyOptions {
   // By doing it, we give max_bytes_for_level_multiplier a priority against
   // max_bytes_for_level_base, for a more predictable LSM tree shape. It is
   // useful to limit worse case space amplification.
-  // If `allow_ingest_behind=true` or `preclude_last_level_data_seconds > 0`,
+  // If `cf_allow_ingest_behind=true` or `preclude_last_level_data_seconds > 0`,
   // then the last level is reserved, and we will start filling LSM from the
   // second last level.
   //
@@ -698,6 +771,13 @@ struct AdvancedColumnFamilyOptions {
   // Dynamically changeable through SetOptions() API
   bool paranoid_file_checks = false;
 
+  // Bitmask enum for output verification option.
+  //
+  // Default: 0 (kVerifyNone)
+  //
+  // Dynamically changeable (as a uint32_t) through SetOptions() API.
+  VerifyOutputFlags verify_output_flags = VerifyOutputFlags::kVerifyNone;
+
   // In debug mode, RocksDB runs consistency checks on the LSM every time the
   // LSM changes (Flush, Compaction, AddFile). When this option is true, these
   // checks are also enabled in release mode. These checks were historically
@@ -714,6 +794,17 @@ struct AdvancedColumnFamilyOptions {
   //
   // Dynamically changeable through SetOptions() API
   bool report_bg_io_stats = false;
+
+  // Setting this option to true disallows ordinary writes to the column family
+  // and it can only be populated through import and ingestion. It is intended
+  // to protect "ingestion only" column families. This option is not currently
+  // supported on the default column family because of error handling challenges
+  // analogous to https://github.com/facebook/rocksdb/issues/13429
+  //
+  // This option is not mutable with SetOptions(). It can be changed between
+  // DB::Open() calls, but open will fail if recovering WAL writes to a CF with
+  // this option set.
+  bool disallow_memtable_writes = false;
 
   // This option has different meanings for different compaction styles:
   //
@@ -807,7 +898,7 @@ struct AdvancedColumnFamilyOptions {
   // If this option is set, when creating the last level files, pass this
   // temperature to FileSystem used. Should be no-op for default FileSystem
   // and users need to plug in their own FileSystem to take advantage of it.
-  // When using FIFO compaction, this option is ignored.
+  // Currently only compatible with universal compaction.
   //
   // Dynamically changeable through the SetOptions() API
   Temperature last_level_temperature = Temperature::kUnknown;
@@ -842,7 +933,7 @@ struct AdvancedColumnFamilyOptions {
   //
   // Default: 0 (disable the feature)
   //
-  // Not dynamically changeable, change it requires db restart.
+  // Dynamically changeable through the SetOptions() API
   uint64_t preclude_last_level_data_seconds = 0;
 
   // EXPERIMENTAL
@@ -865,7 +956,7 @@ struct AdvancedColumnFamilyOptions {
   //
   // Default: 0 (disable the feature)
   //
-  // Not dynamically changeable, change it requires db restart.
+  // Dynamically changeable through the SetOptions() API
   uint64_t preserve_internal_time_seconds = 0;
 
   // When set, large values (blobs) are written to separate blob files, and
@@ -935,13 +1026,12 @@ struct AdvancedColumnFamilyOptions {
   // Dynamically changeable through the SetOptions() API
   double blob_garbage_collection_age_cutoff = 0.25;
 
-  // If the ratio of garbage in the oldest blob files exceeds this threshold,
-  // targeted compactions are scheduled in order to force garbage collecting
-  // the blob files in question, assuming they are all eligible based on the
-  // value of blob_garbage_collection_age_cutoff above. This option is
-  // currently only supported with leveled compactions.
-  // Note that enable_blob_garbage_collection has to be set in order for this
-  // option to have any effect.
+  // If the ratio of garbage in the blob files currently eligible for garbage
+  // collection exceeds this threshold, targeted compactions are scheduled in
+  // order to force garbage collecting the oldest blob files. This option is
+  // currently only supported with leveled compactions. Note that
+  // enable_blob_garbage_collection has to be set in order for this option to
+  // have any effect.
   //
   // Default: 1.0
   //
@@ -1031,8 +1121,10 @@ struct AdvancedColumnFamilyOptions {
   // When setting this flag to `false`, users should also call
   // `DB::IncreaseFullHistoryTsLow` to set a cutoff timestamp for flush. RocksDB
   // refrains from flushing a memtable with data still above
-  // the cutoff timestamp with best effort. If this cutoff timestamp is not set,
-  // flushing continues normally.
+  // the cutoff timestamp with best effort. One limitation of this best effort
+  // is that when `max_write_buffer_number` is equal to or smaller than 2,
+  // RocksDB will not attempt to retain user-defined timestamps, all flush jobs
+  // continue normally.
   //
   // Users can do user-defined
   // multi-versioned read above the cutoff timestamp. When users try to read
@@ -1081,6 +1173,85 @@ struct AdvancedColumnFamilyOptions {
   // Default: 0 (no delay)
   // Dynamically changeable through the SetOptions() API.
   uint32_t bottommost_file_compaction_delay = 0;
+
+  // Enables additional integrity checks during reads/scans.
+  // Specifically, for skiplist-based memtables, key ordering validation could
+  // be enabled optionally. This is helpful to detect corrupted memtable keys
+  // during reads. Enabling this feature incurs a performance overhead due to
+  // additional comparison during memtable lookup.
+  bool paranoid_memory_checks = false;
+
+  // Enables additional integrity checks during seek.
+  // Specifically, for skiplist-based memtables, key checksum validation could
+  // be enabled during seek optionally. This is helpful to detect corrupted
+  // memtable keys during reads. Enabling this feature incurs a performance
+  // overhead due to additional key checksum validation during memtable seek
+  // operation.
+  // This option depends on memtable_protection_bytes_per_key to be non zero.
+  // If memtable_protection_bytes_per_key is zero, no validation is performed.
+  bool memtable_veirfy_per_key_checksum_on_seek = false;
+
+  // When an iterator scans this number of invisible entries (tombstones or
+  // hidden puts) from the active memtable during a single iterator operation,
+  // we will attempt to flush the memtable. Currently only forward scans are
+  // supported (SeekToFirst(), Seek() and Next()).
+  // This option helps to reduce the overhead of scanning through a
+  // large number of entries in memtable.
+  // Users should consider enable deletion-triggered-compaction (see
+  // CompactOnDeletionCollectorFactory) together with this option to compact
+  // away tombstones after the memtable is flushed.
+  //
+  // Note that this option has no effect on tailing iterators yet.
+  //
+  // Default: 0 (disabled)
+  // Dynamically changeable through the SetOptions() API.
+  uint32_t memtable_op_scan_flush_trigger = 0;
+
+  // Similar to `memtable_op_scan_flush_trigger`, but this option applies to
+  // Next() calls between Seeks or until iterator destruction. If the average
+  // of the number of invisible entries scanned from the active memtable, the
+  // memtable will be marked for flush.
+  // Note that to avoid the case where the window between Seeks is too small,
+  // the option only takes effect if the total number of hidden entries scanned
+  // within a window is at least `memtable_op_scan_flush_trigger`. So this
+  // option is only effective when `memtable_op_scan_flush_trigger` is set.
+  //
+  // This option should be set to a lower value than
+  // `memtable_op_scan_flush_trigger`. It covers the case where an iterator
+  // scans through an expensive key range with many invisible entries from the
+  // active memtable, but the number of invisible entries per operation does not
+  // exceed `memtable_op_scan_flush_trigger`.
+  //
+  // Default: 0 (disabled)
+  // Dynamically changeable through the SetOptions() API.
+  uint32_t memtable_avg_op_scan_flush_trigger = 0;
+
+  // If either DBOptions::allow_ingest_behind or this option is set to true,
+  // this column family will prepare for ingesting files to the last level
+  // (IngestExternalFiles() with ingest_behind=true). Users should set only
+  // this option since DBOptions::allow_ingest_behind is deprecated.
+  //
+  // Specifically, preparing a column family for ingesting files to the last
+  // level has the following effects:
+  // 1) Disables some internal optimizations around SST file compression.
+  // 2) Reserves the last level for ingested files only.
+  // 3) Compaction will not include any file from the last level.
+  // 4) Compaction will preserve necessary tombstones that can apply on
+  // top of ingested files.
+  //
+  // Note that only Universal Compaction supports cf_allow_ingest_behind.
+  // `num_levels` should be >= 3 if this option is turned on.
+  //
+  // Note that this option needs to be set to true before any write to the CF.
+  // It's recommended to set the option to true since CF creation. Otherwise,
+  // ingestion with ingest_behind = true might fail. Once file ingestions are
+  // done, the option should be flipped to false. Flipping this option to false
+  // allows the CF to disable the behavior changes detailed above and resume
+  // more efficient operation.
+  //
+  // Default: false
+  // Immutable.
+  bool cf_allow_ingest_behind = false;
 
   // Create ColumnFamilyOptions with default values for all fields
   AdvancedColumnFamilyOptions();

@@ -8,6 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 //
 
+#include "db_stress_tool/db_stress_shared_state.h"
 #ifdef GFLAGS
 #include "db_stress_tool/db_stress_common.h"
 #include "utilities/fault_injection_fs.h"
@@ -81,31 +82,6 @@ bool RunStressTestImpl(SharedState* shared) {
   stress->InitDb(shared);
   stress->FinishInitDb(shared);
 
-  if (FLAGS_write_fault_one_in) {
-    if (!FLAGS_sync_fault_injection) {
-      // unsynced WAL loss is not supported without sync_fault_injection
-      fault_fs_guard->SetDirectWritableTypes({kWalFile});
-    }
-    IOStatus error_msg;
-    if (FLAGS_inject_error_severity <= 1 || FLAGS_inject_error_severity > 2) {
-      error_msg = IOStatus::IOError("Retryable injected write error");
-      error_msg.SetRetryable(true);
-    } else if (FLAGS_inject_error_severity == 2) {
-      error_msg = IOStatus::IOError("Fatal injected write error");
-      error_msg.SetDataLoss(true);
-    }
-    // TODO: inject write error for other file types including
-    //  MANIFEST, CURRENT, and WAL files.
-    fault_fs_guard->SetRandomWriteError(
-        shared->GetSeed(), FLAGS_write_fault_one_in, error_msg,
-        /*inject_for_all_file_types=*/false, {FileType::kTableFile});
-    fault_fs_guard->SetFilesystemDirectWritable(false);
-    fault_fs_guard->EnableWriteErrorInjection();
-  }
-  if (FLAGS_sync_fault_injection) {
-    fault_fs_guard->SetFilesystemDirectWritable(false);
-  }
-
   uint32_t n = FLAGS_threads;
   uint64_t now = clock->NowMicros();
   fprintf(stdout, "%s Initializing worker threads\n",
@@ -124,6 +100,14 @@ bool RunStressTestImpl(SharedState* shared) {
   if (FLAGS_compressed_secondary_cache_size > 0 ||
       FLAGS_compressed_secondary_cache_ratio > 0.0) {
     shared->IncBgThreads();
+  }
+
+  uint32_t remote_compaction_worker_thread_count =
+      FLAGS_remote_compaction_worker_threads;
+  if (remote_compaction_worker_thread_count > 0) {
+    for (uint32_t i = 0; i < remote_compaction_worker_thread_count; i++) {
+      shared->IncBgThreads();
+    }
   }
 
   std::vector<ThreadState*> threads(n);
@@ -148,6 +132,17 @@ bool RunStressTestImpl(SharedState* shared) {
       FLAGS_compressed_secondary_cache_ratio > 0.0) {
     db_stress_env->StartThread(CompressedCacheSetCapacityThread,
                                &compressed_cache_set_capacity_thread);
+  }
+
+  std::vector<ThreadState*> remote_compaction_worker_threads;
+  if (remote_compaction_worker_thread_count > 0) {
+    remote_compaction_worker_threads.reserve(
+        remote_compaction_worker_thread_count);
+    for (uint32_t i = 0; i < remote_compaction_worker_thread_count; i++) {
+      ThreadState* ts = new ThreadState(i, shared);
+      remote_compaction_worker_threads.push_back(ts);
+      db_stress_env->StartThread(RemoteCompactionWorkerThread, ts);
+    }
   }
 
   // Each thread goes through the following states:
@@ -182,7 +177,19 @@ bool RunStressTestImpl(SharedState* shared) {
       if (!FLAGS_expected_values_dir.empty()) {
         stress->TrackExpectedState(shared);
       }
-      now = clock->NowMicros();
+
+      if (FLAGS_sync_fault_injection || FLAGS_write_fault_one_in > 0) {
+        fault_fs_guard->SetFilesystemDirectWritable(false);
+        fault_fs_guard->SetInjectUnsyncedDataLoss(FLAGS_sync_fault_injection);
+        if (FLAGS_exclude_wal_from_write_fault_injection) {
+          fault_fs_guard->SetFileTypesExcludedFromWriteFaultInjection(
+              {FileType::kWalFile});
+        }
+      }
+      if (ShouldDisableAutoCompactionsBeforeVerifyDb()) {
+        Status s = stress->EnableAutoCompaction();
+        assert(s.ok());
+      }
       fprintf(stdout, "%s Starting database operations\n",
               clock->TimeToString(now / 1000000).c_str());
 
@@ -230,6 +237,7 @@ bool RunStressTestImpl(SharedState* shared) {
     delete threads[i];
     threads[i] = nullptr;
   }
+
   now = clock->NowMicros();
   if (!FLAGS_skip_verifydb && !FLAGS_test_batches_snapshots &&
       !shared->HasVerificationFailedYet()) {
@@ -244,12 +252,22 @@ bool RunStressTestImpl(SharedState* shared) {
   if (FLAGS_compaction_thread_pool_adjust_interval > 0 ||
       FLAGS_continuous_verification_interval > 0 ||
       FLAGS_compressed_secondary_cache_size > 0 ||
-      FLAGS_compressed_secondary_cache_ratio > 0.0) {
+      FLAGS_compressed_secondary_cache_ratio > 0.0 ||
+      remote_compaction_worker_thread_count > 0) {
     MutexLock l(shared->GetMutex());
     shared->SetShouldStopBgThread();
     while (!shared->BgThreadsFinished()) {
       shared->GetCondVar()->Wait();
     }
+  }
+
+  assert(remote_compaction_worker_threads.size() ==
+         remote_compaction_worker_thread_count);
+  if (remote_compaction_worker_thread_count > 0) {
+    for (ThreadState* thread_state : remote_compaction_worker_threads) {
+      delete thread_state;
+    }
+    remote_compaction_worker_threads.clear();
   }
 
   if (shared->HasVerificationFailedYet()) {

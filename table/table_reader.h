@@ -12,8 +12,8 @@
 
 #include "db/range_tombstone_fragmenter.h"
 #if USE_COROUTINES
-#include "folly/experimental/coro/Coroutine.h"
-#include "folly/experimental/coro/Task.h"
+#include "folly/coro/Coroutine.h"
+#include "folly/coro/Task.h"
 #endif
 #include "rocksdb/slice_transform.h"
 #include "rocksdb/table_reader_caller.h"
@@ -179,14 +179,25 @@ class TableReader {
   }
 
   // convert db file to a human readable form
-  virtual Status DumpTable(WritableFile* /*out_file*/) {
+  virtual Status DumpTable(WritableFile* /*out_file*/,
+                           bool /*show_sequence_number_type*/ = false) {
     return Status::NotSupported("DumpTable() not supported");
   }
 
   // check whether there is corruption in this db file
   virtual Status VerifyChecksum(const ReadOptions& /*read_options*/,
-                                TableReaderCaller /*caller*/) {
+                                TableReaderCaller /*caller*/,
+                                bool /*meta_blocks_only*/ = false) {
     return Status::NotSupported("VerifyChecksum() not supported");
+  }
+
+  // Tell the reader that the file should now be obsolete, e.g. as a hint
+  // to delete relevant cache entries on destruction. (It might not be safe
+  // to "unpin" cache entries until destruction time.) NOTE: must be thread
+  // safe because multiple table cache references might all mark this file as
+  // obsolete when they are released (the last of which destroys this reader).
+  virtual void MarkObsolete(uint32_t /*uncache_aggressiveness*/) {
+    // no-op as default
   }
 };
 

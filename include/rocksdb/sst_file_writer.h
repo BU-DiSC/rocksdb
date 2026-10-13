@@ -5,7 +5,6 @@
 
 #pragma once
 
-
 #include <memory>
 #include <string>
 
@@ -15,12 +14,6 @@
 #include "rocksdb/table_properties.h"
 #include "rocksdb/types.h"
 #include "rocksdb/wide_columns.h"
-
-#if defined(__GNUC__) || defined(__clang__)
-#define ROCKSDB_DEPRECATED_FUNC __attribute__((__deprecated__))
-#elif _WIN32
-#define ROCKSDB_DEPRECATED_FUNC __declspec(deprecated)
-#endif
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -118,7 +111,7 @@ class SstFileWriter {
   // REQUIRES: user_key is after any previously added point (Put/Merge/Delete)
   //           key according to the comparator.
   // REQUIRES: comparator is *not* timestamp-aware.
-  ROCKSDB_DEPRECATED_FUNC Status Add(const Slice& user_key, const Slice& value);
+  [[deprecated]] Status Add(const Slice& user_key, const Slice& value);
 
   // Add a Put key with value to currently opened file
   // REQUIRES: user_key is after any previously added point (Put/Merge/Delete)
@@ -194,6 +187,9 @@ class SstFileWriter {
 
   // Return the current file size.
   uint64_t FileSize();
+
+  // Check if a file with input table property is created by SstFileWriter.
+  static bool CreatedBySstFileWriter(const TableProperties&);
 
  private:
   void InvalidatePageCache(bool closing);

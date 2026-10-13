@@ -11,6 +11,16 @@
 #if defined(ROCKSDB_IOURING_PRESENT)
 #include <liburing.h>
 #include <sys/uio.h>
+
+// Compatibility defines for io_uring flags that may not be present in older
+// kernel headers. These values are fixed and won't change, so it's safe to
+// define them even if the running kernel doesn't support them.
+#ifndef IORING_SETUP_SINGLE_ISSUER
+#define IORING_SETUP_SINGLE_ISSUER (1U << 12)
+#endif
+#ifndef IORING_SETUP_DEFER_TASKRUN
+#define IORING_SETUP_DEFER_TASKRUN (1U << 13)
+#endif
 #endif
 #include <unistd.h>
 
@@ -30,7 +40,7 @@
 // For non linux platform, the following macros are used only as place
 // holder.
 #if !(defined OS_LINUX) && !(defined OS_FREEBSD) && !(defined CYGWIN) && \
-    !(defined OS_AIX)
+    !(defined OS_AIX) && !(defined OS_ANDROID)
 #define POSIX_FADV_NORMAL 0     /* [MC1] no further special treatment */
 #define POSIX_FADV_RANDOM 1     /* [MC1] expect random page refs */
 #define POSIX_FADV_SEQUENTIAL 2 /* [MC1] expect sequential page refs */
@@ -53,10 +63,39 @@ IOStatus IOError(const std::string& context, const std::string& file_name,
 
 class PosixHelper {
  public:
+  static const std::string& GetLogicalBlockSizeFileName() {
+    static const std::string kLogicalBlockSizeFileName = "logical_block_size";
+    return kLogicalBlockSizeFileName;
+  }
+  static const std::string& GetMaxSectorsKBFileName() {
+    static const std::string kMaxSectorsKBFileName = "max_sectors_kb";
+    return kMaxSectorsKBFileName;
+  }
   static size_t GetUniqueIdFromFile(int fd, char* id, size_t max_size);
   static size_t GetLogicalBlockSizeOfFd(int fd);
   static Status GetLogicalBlockSizeOfDirectory(const std::string& directory,
                                                size_t* size);
+
+  static Status GetMaxSectorsKBOfDirectory(const std::string& directory,
+                                           size_t* kb);
+
+ private:
+  static const size_t kDefaultMaxSectorsKB = 2 * 1024;
+
+  static size_t GetMaxSectorsKBOfFd(int fd);
+
+  // Return the value in the specified `file_name` under
+  // `/sys/block/xxx/queue/` for the device where the file of `fd` is on.
+  // If not found, then return the specified `default_return_value`
+  static size_t GetQueueSysfsFileValueOfFd(int fd, const std::string& file_name,
+                                           size_t default_return_value);
+
+  /// Return the value in the specified `file_name` under
+  // `/sys/block/xxx/queue/` for the device where `directory` is on.
+  // If not found, then return the specified `default_return_value`
+  static Status GetQueueSysfsFileValueofDirectory(const std::string& directory,
+                                                  const std::string& file_name,
+                                                  size_t* value);
 };
 
 /*
@@ -268,9 +307,9 @@ inline void DeleteIOUring(void* p) {
   delete iu;
 }
 
-inline struct io_uring* CreateIOUring() {
+inline struct io_uring* CreateIOUring(unsigned int flags = 0) {
   struct io_uring* new_io_uring = new struct io_uring;
-  int ret = io_uring_queue_init(kIoUringDepth, new_io_uring, 0);
+  int ret = io_uring_queue_init(kIoUringDepth, new_io_uring, flags);
   if (ret) {
     delete new_io_uring;
     new_io_uring = nullptr;
@@ -286,7 +325,8 @@ class PosixRandomAccessFile : public FSRandomAccessFile {
   bool use_direct_io_;
   size_t logical_sector_size_;
 #if defined(ROCKSDB_IOURING_PRESENT)
-  ThreadLocalPtr* thread_local_io_urings_;
+  ThreadLocalPtr* thread_local_async_read_io_urings_;
+  ThreadLocalPtr* thread_local_multi_read_io_urings_;
 #endif
 
  public:
@@ -294,7 +334,8 @@ class PosixRandomAccessFile : public FSRandomAccessFile {
                         size_t logical_block_size, const EnvOptions& options
 #if defined(ROCKSDB_IOURING_PRESENT)
                         ,
-                        ThreadLocalPtr* thread_local_io_urings
+                        ThreadLocalPtr* thread_local_async_read_io_urings,
+                        ThreadLocalPtr* thread_local_multi_read_io_urings
 #endif
   );
   virtual ~PosixRandomAccessFile();
@@ -323,6 +364,8 @@ class PosixRandomAccessFile : public FSRandomAccessFile {
                              void* cb_arg, void** io_handle,
                              IOHandleDeleter* del_fn,
                              IODebugContext* dbg) override;
+
+  virtual IOStatus GetFileSize(uint64_t* result) override;
 };
 
 class PosixWritableFile : public FSWritableFile {
@@ -345,7 +388,8 @@ class PosixWritableFile : public FSWritableFile {
  public:
   explicit PosixWritableFile(const std::string& fname, int fd,
                              size_t logical_block_size,
-                             const EnvOptions& options);
+                             const EnvOptions& options,
+                             uint64_t initial_file_size);
   virtual ~PosixWritableFile();
 
   // Need to implement this so the file is truncated correctly
@@ -407,6 +451,7 @@ class PosixMmapReadableFile : public FSRandomAccessFile {
                 char* scratch, IODebugContext* dbg) const override;
   void Hint(AccessPattern pattern) override;
   IOStatus InvalidateCache(size_t offset, size_t length) override;
+  virtual IOStatus GetFileSize(uint64_t* result) override;
 };
 
 class PosixMmapFile : public FSWritableFile {
@@ -440,7 +485,7 @@ class PosixMmapFile : public FSWritableFile {
 
  public:
   PosixMmapFile(const std::string& fname, int fd, size_t page_size,
-                const EnvOptions& options);
+                const EnvOptions& options, uint64_t initial_file_size);
   ~PosixMmapFile();
 
   // Means Close() will properly take care of truncate

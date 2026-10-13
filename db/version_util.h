@@ -1,4 +1,4 @@
-//  Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
+//  Copyright (c) Meta Platforms, Inc. and affiliates.
 //  This source code is licensed under both the GPLv2 (found in the
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
@@ -23,7 +23,8 @@ class OfflineManifestWriter {
         immutable_db_options_(WithDbPath(options, db_path)),
         tc_(NewLRUCache(1 << 20 /* capacity */,
                         options.table_cache_numshardbits)),
-        versions_(db_path, &immutable_db_options_, sopt_, tc_.get(), &wb_, &wc_,
+        versions_(db_path, &immutable_db_options_, MutableDBOptions{options},
+                  sopt_, tc_.get(), &wb_, &wc_,
                   /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
                   /*db_id=*/"", /*db_session_id=*/"",
                   options.daily_offpeak_time_utc,
@@ -43,9 +44,8 @@ class OfflineManifestWriter {
     // Use `mutex` to imitate a locked DB mutex when calling `LogAndApply()`.
     InstrumentedMutex mutex;
     mutex.Lock();
-    Status s = versions_.LogAndApply(cfd, *cfd->GetLatestMutableCFOptions(),
-                                     read_options, write_options, edit, &mutex,
-                                     dir_contains_current_file,
+    Status s = versions_.LogAndApply(cfd, read_options, write_options, edit,
+                                     &mutex, dir_contains_current_file,
                                      false /* new_descriptor_log */);
     mutex.Unlock();
     return s;

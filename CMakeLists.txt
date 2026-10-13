@@ -27,12 +27,12 @@
 #
 # Linux:
 #
-# 1. Install a recent toolchain if you're on a older distro. C++17 required (GCC >= 7, Clang >= 5)
+# 1. Install a recent toolchain if you're on a older distro. C++20 required (GCC >= 11, Clang >= 10)
 # 2. mkdir build; cd build
 # 3. cmake ..
 # 4. make -j
 
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.12)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake/modules/")
 include(ReadVersion)
@@ -80,6 +80,7 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "${default_build_type}" CACHE STRING
     "Default BUILD_TYPE is ${default_build_type}" FORCE)
 endif()
+message(STATUS "CMAKE_BUILD_TYPE is set to ${CMAKE_BUILD_TYPE}")
 
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
@@ -100,7 +101,7 @@ endif()
 option(ROCKSDB_BUILD_SHARED "Build shared versions of the RocksDB libraries" ON)
 
 if( NOT DEFINED CMAKE_CXX_STANDARD )
-  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_CXX_STANDARD 20)
 endif()
 
 include(CMakeDependentOption)
@@ -132,7 +133,9 @@ else()
     option(WITH_GFLAGS "build with GFlags" ON)
   endif()
   set(GFLAGS_LIB)
-  if(WITH_GFLAGS)
+  # Skip all gflags detection and setup when USE_FOLLY or USE_COROUTINES is enabled
+  # since Folly provides its own gflags (USE_COROUTINES automatically sets USE_FOLLY)
+  if(WITH_GFLAGS AND NOT USE_FOLLY AND NOT USE_COROUTINES)
     # Config with namespace available since gflags 2.2.2
     option(GFLAGS_USE_TARGET_NAMESPACE "Use gflags import target with namespace." ON)
     find_package(gflags CONFIG)
@@ -150,6 +153,9 @@ else()
     endif()
     include_directories(${GFLAGS_INCLUDE_DIR})
     list(APPEND THIRDPARTY_LIBS ${GFLAGS_LIB})
+    add_definitions(-DGFLAGS=1)
+  elseif(WITH_GFLAGS AND (USE_FOLLY OR USE_COROUTINES))
+    # Still set the DGFLAGS=1 define when using Folly since Folly provides gflags
     add_definitions(-DGFLAGS=1)
   endif()
 
@@ -203,9 +209,20 @@ if(WIN32 AND MSVC)
   endif()
 endif()
 
+option(WIN_CI "Accelerate build speed and reduce build artifect size for github CI with MSVC" OFF)
+
 if(MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi /nologo /EHsc /GS /Gd /GR /GF /fp:precise /Zc:wchar_t /Zc:forScope /errorReport:queue")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FC /d2Zi+ /W4 /wd4127 /wd4996 /wd4100 /wd4324")
+  if(WIN_CI)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP /nologo /EHsc /Gd /GR /GF /fp:precise /Zc:wchar_t /Zc:forScope /errorReport:queue")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FC /W4 /wd4127 /wd4996 /wd4100 /wd4324 /wd4702")
+  else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi /nologo /EHsc /GS /Gd /GR /GF /fp:precise /Zc:wchar_t /Zc:forScope /errorReport:queue")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FC /d2Zi+ /W4 /wd4127 /wd4996 /wd4100 /wd4324")
+  endif()
+  if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /DNDEBUG")
+    message(STATUS "Setting /DNDEBUG as CMAKE_BUILD_TYPE is set to ${CMAKE_BUILD_TYPE}")
+  endif()
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -W -Wextra -Wall -pthread")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wsign-compare -Wshadow -Wno-unused-parameter -Wno-unused-variable -Woverloaded-virtual -Wnon-virtual-dtor -Wno-missing-field-initializers -Wno-strict-aliasing -Wno-invalid-offsetof")
@@ -267,8 +284,8 @@ endif(CMAKE_SYSTEM_PROCESSOR MATCHES "s390x")
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "loongarch64")
   CHECK_C_COMPILER_FLAG("-march=loongarch64" HAS_LOONGARCH64)
   if(HAS_LOONGARCH64)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mcpu=loongarch64 -mtune=loongarch64")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=loongarch64 -mtune=loongarch64")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=loongarch64 -mtune=loongarch64")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=loongarch64 -mtune=loongarch64")
   endif(HAS_LOONGARCH64)
 endif(CMAKE_SYSTEM_PROCESSOR MATCHES "loongarch64")
 
@@ -313,8 +330,7 @@ if(NOT MSVC)
 endif()
 
 # Check if -latomic is required or not
-if (NOT MSVC)
-  set(CMAKE_REQUIRED_FLAGS "--std=c++17")
+if (NOT MSVC AND NOT APPLE)
   CHECK_CXX_SOURCE_COMPILES("
 #include <atomic>
 std::atomic<uint64_t> x(0);
@@ -451,24 +467,33 @@ else()
   endif()
 endif()
 
-# Used to run CI build and tests so we can run faster
+# Used to run optimized debug build and tests so we can run faster
 option(OPTDBG "Build optimized debug build with MSVC" OFF)
 option(WITH_RUNTIME_DEBUG "build with debug version of runtime library" ON)
 if(MSVC)
-  if(OPTDBG)
+  if (WIN_CI)
     message(STATUS "Debug optimization is enabled")
     set(CMAKE_CXX_FLAGS_DEBUG "/Oxt")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DEBUG:FASTLINK")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DEBUG:FASTLINK")
   else()
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /RTC1")
-
-    # Minimal Build is deprecated after MSVC 2015
-    if( MSVC_VERSION GREATER 1900 )
-      set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Gm-")
+    if(OPTDBG)
+      message(STATUS "Debug optimization is enabled")
+      set(CMAKE_CXX_FLAGS_DEBUG "/Oxt")
     else()
-      set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Gm")
-    endif()
+      set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /RTC1")
 
+      # Minimal Build is deprecated after MSVC 2015
+      if( MSVC_VERSION GREATER 1900 )
+        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Gm-")
+      else()
+        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Gm")
+      endif()
+    endif()
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DEBUG")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DEBUG")
   endif()
+
   if(WITH_RUNTIME_DEBUG)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /${RUNTIME_LIBRARY}d")
   else()
@@ -476,8 +501,6 @@ if(MSVC)
   endif()
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Oxt /Zp8 /Gm- /Gy /${RUNTIME_LIBRARY}")
 
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DEBUG")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DEBUG")
 endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX)
@@ -488,6 +511,8 @@ if(CMAKE_SYSTEM_NAME MATCHES "Cygwin")
   add_definitions(-fno-builtin-memcmp -DCYGWIN)
 elseif(CMAKE_SYSTEM_NAME MATCHES "Darwin")
   add_definitions(-DOS_MACOSX)
+elseif(CMAKE_SYSTEM_NAME MATCHES "iOS")
+  add_definitions(-DOS_MACOSX -DIOS_CROSS_COMPILE)
 elseif(CMAKE_SYSTEM_NAME MATCHES "Linux")
   add_definitions(-DOS_LINUX)
 elseif(CMAKE_SYSTEM_NAME MATCHES "SunOS")
@@ -615,7 +640,7 @@ if(USE_FOLLY)
     FMT_INST_PATH)
     exec_program(ls ARGS -d ${FOLLY_INST_PATH}/../gflags* OUTPUT_VARIABLE
     GFLAGS_INST_PATH)
-    set(Boost_DIR ${BOOST_INST_PATH}/lib/cmake/Boost-1.78.0)
+    set(Boost_DIR ${BOOST_INST_PATH}/lib/cmake/Boost-1.83.0)
     if(EXISTS ${FMT_INST_PATH}/lib64)
       set(fmt_DIR ${FMT_INST_PATH}/lib64/cmake/fmt)
     else()
@@ -627,6 +652,12 @@ if(USE_FOLLY)
     ${FOLLY_INST_PATH}/lib/cmake/folly/folly-targets.cmake)
 
     include(${FOLLY_INST_PATH}/lib/cmake/folly/folly-config.cmake)
+
+    # Fix gflags library name for debug builds
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath=${GFLAGS_INST_PATH}/lib")
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${GFLAGS_INST_PATH}/lib/libgflags_debug.so.2.2")
+    endif()
   endif()
 
   add_compile_definitions(USE_FOLLY FOLLY_NO_CONFIG HAVE_CXX11_ATOMIC)
@@ -653,6 +684,7 @@ set(SOURCES
         cache/sharded_cache.cc
         cache/tiered_secondary_cache.cc
         db/arena_wrapped_db_iter.cc
+        db/attribute_group_iterator_impl.cc
         db/blob/blob_contents.cc
         db/blob/blob_fetcher.cc
         db/blob/blob_file_addition.cc
@@ -669,6 +701,7 @@ set(SOURCES
         db/blob/prefetch_buffer_collection.cc
         db/builder.cc
         db/c.cc
+        db/coalescing_iterator.cc
         db/column_family.cc
         db/compaction/compaction.cc
         db/compaction/compaction_iterator.cc
@@ -689,6 +722,7 @@ set(SOURCES
         db/db_impl/db_impl_write.cc
         db/db_impl/db_impl_compaction_flush.cc
         db/db_impl/db_impl_files.cc
+        db/db_impl/db_impl_follower.cc
         db/db_impl/db_impl_open.cc
         db/db_impl/db_impl_debug.cc
         db/db_impl/db_impl_experimental.cc
@@ -711,11 +745,12 @@ set(SOURCES
         db/log_reader.cc
         db/log_writer.cc
         db/malloc_stats.cc
+        db/manifest_ops.cc
         db/memtable.cc
         db/memtable_list.cc
         db/merge_helper.cc
         db/merge_operator.cc
-        db/multi_cf_iterator.cc
+        db/multi_scan.cc
         db/output_validator.cc
         db/periodic_task_scheduler.cc
         db/range_del_aggregator.cc
@@ -741,12 +776,14 @@ set(SOURCES
         db/write_controller.cc
         db/write_stall_stats.cc
         db/write_thread.cc
+        db_stress_tool/db_stress_compression_manager.cc
         env/composite_env.cc
         env/env.cc
         env/env_chroot.cc
         env/env_encryption.cc
         env/file_system.cc
         env/file_system_tracer.cc
+        env/fs_on_demand.cc
         env/fs_remap.cc
         env/mock_env.cc
         env/unique_id_gen.cc
@@ -774,6 +811,7 @@ set(SOURCES
         memtable/hash_skiplist_rep.cc
         memtable/skiplistrep.cc
         memtable/vectorrep.cc
+        memtable/wbwi_memtable.cc
         memtable/write_buffer_manager.cc
         monitoring/histogram.cc
         monitoring/histogram_windowing.cc
@@ -828,6 +866,7 @@ set(SOURCES
         table/cuckoo/cuckoo_table_builder.cc
         table/cuckoo/cuckoo_table_factory.cc
         table/cuckoo/cuckoo_table_reader.cc
+        table/external_table.cc
         table/format.cc
         table/get_context.cc
         table/iterator.cc
@@ -866,11 +905,13 @@ set(SOURCES
         trace_replay/trace_record.cc
         trace_replay/trace_replay.cc
         util/async_file_reader.cc
+        util/auto_tune_compressor.cc
         util/cleanable.cc
         util/coding.cc
         util/compaction_job_stats_impl.cc
         util/comparator.cc
         util/compression.cc
+        util/simple_mixed_compressor.cc
         util/compression_context_cache.cc
         util/concurrent_task_limiter_impl.cc
         util/crc32c.cc
@@ -932,8 +973,11 @@ set(SOURCES
         utilities/persistent_cache/block_cache_tier_metadata.cc
         utilities/persistent_cache/persistent_cache_tier.cc
         utilities/persistent_cache/volatile_tier_impl.cc
+        utilities/secondary_index/secondary_index_iterator.cc
+        utilities/secondary_index/simple_secondary_index.cc
         utilities/simulator_cache/cache_simulator.cc
         utilities/simulator_cache/sim_cache.cc
+        utilities/table_properties_collectors/compact_for_tiering_collector.cc
         utilities/table_properties_collectors/compact_on_deletion_collector.cc
         utilities/trace/file_trace_reader_writer.cc
         utilities/trace/replayer_impl.cc
@@ -954,6 +998,7 @@ set(SOURCES
         utilities/transactions/write_prepared_txn_db.cc
         utilities/transactions/write_unprepared_txn.cc
         utilities/transactions/write_unprepared_txn_db.cc
+        utilities/types_util.cc
         utilities/ttl/db_ttl_impl.cc
         utilities/wal_filter.cc
         utilities/write_batch_with_index/write_batch_with_index.cc
@@ -1045,6 +1090,7 @@ if(USE_FOLLY_LITE)
   list(APPEND SOURCES
     third-party/folly/folly/container/detail/F14Table.cpp
     third-party/folly/folly/detail/Futex.cpp
+    third-party/folly/folly/lang/Exception.cpp
     third-party/folly/folly/lang/SafeAssert.cpp
     third-party/folly/folly/lang/ToAscii.cpp
     third-party/folly/folly/ScopeGuard.cpp
@@ -1052,6 +1098,21 @@ if(USE_FOLLY_LITE)
     third-party/folly/folly/synchronization/DistributedMutex.cpp
     third-party/folly/folly/synchronization/ParkingLot.cpp)
   include_directories(${PROJECT_SOURCE_DIR}/third-party/folly)
+  # Add boost to the include path
+  exec_program(python3 ${PROJECT_SOURCE_DIR}/third-party/folly ARGS
+  build/fbcode_builder/getdeps.py show-source-dir boost OUTPUT_VARIABLE
+  BOOST_SOURCE_PATH)
+  exec_program(ls ARGS -d ${BOOST_SOURCE_PATH}/boost* OUTPUT_VARIABLE
+  BOOST_INCLUDE_DIR)
+  include_directories(${BOOST_INCLUDE_DIR})
+  # Add fmt to the include path
+  exec_program(python3 ${PROJECT_SOURCE_DIR}/third-party/folly ARGS
+  build/fbcode_builder/getdeps.py show-source-dir fmt OUTPUT_VARIABLE
+  FMT_SOURCE_PATH)
+  exec_program(ls ARGS -d ${FMT_SOURCE_PATH}/fmt*/include OUTPUT_VARIABLE
+  FMT_INCLUDE_DIR)
+  include_directories(${FMT_INCLUDE_DIR})
+
   add_definitions(-DUSE_FOLLY -DFOLLY_NO_CONFIG)
   list(APPEND THIRDPARTY_LIBS glog)
 endif()
@@ -1323,6 +1384,7 @@ if(WITH_TESTS)
         db/db_clip_test.cc
         db/db_dynamic_level_test.cc
         db/db_encryption_test.cc
+        db/db_etc3_test.cc
         db/db_flush_test.cc
         db/db_inplace_update_test.cc
         db/db_io_failure_test.cc
@@ -1361,6 +1423,7 @@ if(WITH_TESTS)
         db/file_indexer_test.cc
         db/filename_test.cc
         db/flush_job_test.cc
+        db/db_follower_test.cc
         db/import_column_family_test.cc
         db/listener_test.cc
         db/log_test.cc
@@ -1436,6 +1499,7 @@ if(WITH_TESTS)
         util/autovector_test.cc
         util/bloom_test.cc
         util/coding_test.cc
+        util/compression_test.cc
         util/crc32c_test.cc
         util/defer_test.cc
         util/dynamic_bloom_test.cc
@@ -1474,16 +1538,19 @@ if(WITH_TESTS)
         utilities/persistent_cache/persistent_cache_test.cc
         utilities/simulator_cache/cache_simulator_test.cc
         utilities/simulator_cache/sim_cache_test.cc
+        utilities/table_properties_collectors/compact_for_tiering_collector_test.cc
         utilities/table_properties_collectors/compact_on_deletion_collector_test.cc
         utilities/transactions/optimistic_transaction_test.cc
         utilities/transactions/transaction_test.cc
         utilities/transactions/lock/point/point_lock_manager_test.cc
+        utilities/transactions/lock/point/point_lock_manager_stress_test.cc
         utilities/transactions/write_committed_transaction_ts_test.cc
         utilities/transactions/write_prepared_transaction_test.cc
         utilities/transactions/write_unprepared_transaction_test.cc
         utilities/transactions/lock/range/range_locking_test.cc
         utilities/transactions/timestamped_snapshot_test.cc
         utilities/ttl/ttl_test.cc
+        utilities/types_util_test.cc
         utilities/util_merge_operators_test.cc
         utilities/write_batch_with_index/write_batch_with_index_test.cc
 	${PLUGIN_TESTS}
@@ -1552,6 +1619,7 @@ if(WITH_BENCHMARK_TOOLS)
   add_executable(db_bench${ARTIFACT_SUFFIX}
     tools/simulated_hybrid_file_system.cc
     tools/db_bench.cc
+    tools/tool_hooks.cc
     tools/db_bench_tool.cc)
   target_link_libraries(db_bench${ARTIFACT_SUFFIX}
     ${ROCKSDB_LIB} ${THIRDPARTY_LIBS})
@@ -1585,6 +1653,12 @@ if(WITH_BENCHMARK_TOOLS)
   add_executable(hash_table_bench${ARTIFACT_SUFFIX}
     utilities/persistent_cache/hash_table_bench.cc)
   target_link_libraries(hash_table_bench${ARTIFACT_SUFFIX}
+    ${ROCKSDB_LIB} ${GFLAGS_LIB} ${FOLLY_LIBS})
+
+  add_executable(point_lock_bench${ARTIFACT_SUFFIX}
+    utilities/transactions/lock/point/point_lock_bench.cc
+    utilities/transactions/lock/point/point_lock_bench_tool.cc)
+  target_link_libraries(point_lock_bench${ARTIFACT_SUFFIX}
     ${ROCKSDB_LIB} ${GFLAGS_LIB} ${FOLLY_LIBS})
 endif()
 

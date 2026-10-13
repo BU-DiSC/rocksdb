@@ -163,8 +163,8 @@ class Block {
 
   ~Block();
 
-  size_t size() const { return size_; }
-  const char* data() const { return data_; }
+  size_t size() const { return contents_.data.size(); }
+  const char* data() const { return contents_.data.data(); }
   // The additional memory space taken by the block data.
   size_t usable_size() const { return contents_.usable_size(); }
   uint32_t NumRestarts() const;
@@ -277,8 +277,6 @@ class Block {
 
  private:
   BlockContents contents_;
-  const char* data_;         // contents_.data.data()
-  size_t size_;              // contents_.data.size()
   uint32_t restart_offset_;  // Offset in data_ of restart array
   uint32_t num_restarts_;
   std::unique_ptr<BlockReadAmpBitmap> read_amp_bitmap_;
@@ -575,13 +573,7 @@ class BlockIter : public InternalIteratorBase<TValue> {
 
   void UpdateRawKeyAndMaybePadMinTimestamp(const Slice& key) {
     if (pad_min_timestamp_) {
-      std::string buf;
-      if (raw_key_.IsUserKey()) {
-        AppendKeyWithMinTimestamp(&buf, key, ts_sz_);
-      } else {
-        PadInternalKeyWithMinTimestamp(&buf, key, ts_sz_);
-      }
-      raw_key_.SetKey(buf, true /* copy */);
+      raw_key_.SetKeyWithPaddedMinTimestamp(key, ts_sz_);
     } else {
       raw_key_.SetKey(key, false /* copy */);
     }

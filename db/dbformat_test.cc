@@ -23,17 +23,17 @@ static std::string IKey(const std::string& user_key, uint64_t seq,
 }
 
 static std::string Shorten(const std::string& s, const std::string& l) {
-  std::string result = s;
-  ShortenedIndexBuilder::FindShortestInternalKeySeparator(*BytewiseComparator(),
-                                                          &result, l);
-  return result;
+  std::string scratch;
+  return ShortenedIndexBuilder::FindShortestInternalKeySeparator(
+             *BytewiseComparator(), s, l, &scratch)
+      .ToString();
 }
 
 static std::string ShortSuccessor(const std::string& s) {
-  std::string result = s;
-  ShortenedIndexBuilder::FindShortInternalKeySuccessor(*BytewiseComparator(),
-                                                       &result);
-  return result;
+  std::string scratch;
+  return ShortenedIndexBuilder::FindShortInternalKeySuccessor(
+             *BytewiseComparator(), s, &scratch)
+      .ToString();
 }
 
 static void TestKey(const std::string& key, uint64_t seq, ValueType vt) {
@@ -331,6 +331,50 @@ TEST_F(FormatTest, ReplaceInternalKeyWithMinTimestamp) {
   ASSERT_EQ(orig_user_key.size(), new_key.user_key.size());
   ASSERT_EQ(100, new_key.sequence);
   ASSERT_EQ(kTypeValue, new_key.type);
+}
+
+TEST(RocksdbVersionTest, Version) {
+  // Test preprocessor macros for versioning
+  ASSERT_GT(ROCKSDB_MAJOR, 0);
+  ASSERT_GE(ROCKSDB_MINOR, 0);
+  ASSERT_GE(ROCKSDB_PATCH, 0);
+  ASSERT_LT(ROCKSDB_MAJOR, 1000);
+  ASSERT_LT(ROCKSDB_MINOR, 1000);
+  ASSERT_LT(ROCKSDB_PATCH, 1000);
+  ASSERT_EQ(ROCKSDB_MAKE_VERSION_INT(123, 456, 789), 123456789);
+  ASSERT_GT(ROCKSDB_VERSION_INT, 9999999);
+  ASSERT_LT(ROCKSDB_VERSION_INT, 99999999);
+  static_assert(ROCKSDB_VERSION_GE(9, 8, 7));
+  static_assert(
+      ROCKSDB_VERSION_GE(ROCKSDB_MAJOR, ROCKSDB_MINOR, ROCKSDB_PATCH));
+  static_assert(
+      ROCKSDB_VERSION_GE(ROCKSDB_MAJOR, ROCKSDB_MINOR, ROCKSDB_PATCH - 1));
+  static_assert(
+      ROCKSDB_VERSION_GE(ROCKSDB_MAJOR, ROCKSDB_MINOR, ROCKSDB_PATCH - 100));
+  static_assert(
+      ROCKSDB_VERSION_GE(ROCKSDB_MAJOR, ROCKSDB_MINOR - 1, ROCKSDB_PATCH + 1));
+  static_assert(ROCKSDB_VERSION_GE(ROCKSDB_MAJOR - 1, ROCKSDB_MINOR + 1,
+                                   ROCKSDB_PATCH + 1));
+  static_assert(
+      !ROCKSDB_VERSION_GE(ROCKSDB_MAJOR, ROCKSDB_MINOR, ROCKSDB_PATCH + 1));
+  static_assert(
+      !ROCKSDB_VERSION_GE(ROCKSDB_MAJOR, ROCKSDB_MINOR, ROCKSDB_PATCH + 100));
+  static_assert(
+      !ROCKSDB_VERSION_GE(ROCKSDB_MAJOR, ROCKSDB_MINOR + 1, ROCKSDB_PATCH - 1));
+  static_assert(!ROCKSDB_VERSION_GE(ROCKSDB_MAJOR + 1, ROCKSDB_MINOR - 1,
+                                    ROCKSDB_PATCH - 1));
+  // More typical usage (but with literal numbers based on relevant API
+  // features)
+#if ROCKSDB_VERSION_GE(ROCKSDB_MAJOR, ROCKSDB_MINOR, ROCKSDB_PATCH)
+  static_assert(true);
+#else
+  static_assert(false);
+#endif
+#if !ROCKSDB_VERSION_GE(ROCKSDB_MAJOR, ROCKSDB_MINOR, ROCKSDB_PATCH + 1)
+  static_assert(true);
+#else
+  static_assert(false);
+#endif
 }
 
 }  // namespace ROCKSDB_NAMESPACE

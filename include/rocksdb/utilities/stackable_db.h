@@ -27,6 +27,10 @@ class StackableDB : public DB {
   explicit StackableDB(std::shared_ptr<DB> db)
       : db_(db.get()), shared_db_ptr_(db) {}
 
+  // StackableDB take sole ownership of the underlying db.
+  explicit StackableDB(std::unique_ptr<DB>&& db)
+      : db_(db.get()), shared_db_ptr_(std::move(db)) {}
+
   ~StackableDB() override {
     if (shared_db_ptr_ == nullptr) {
       delete db_;
@@ -103,10 +107,16 @@ class StackableDB : public DB {
   }
 
   using DB::GetEntity;
+
   Status GetEntity(const ReadOptions& options,
                    ColumnFamilyHandle* column_family, const Slice& key,
                    PinnableWideColumns* columns) override {
     return db_->GetEntity(options, column_family, key, columns);
+  }
+
+  Status GetEntity(const ReadOptions& options, const Slice& key,
+                   PinnableAttributeGroups* result) override {
+    return db_->GetEntity(options, key, result);
   }
 
   using DB::GetMergeOperands;
@@ -145,6 +155,12 @@ class StackableDB : public DB {
                       bool sorted_input) override {
     db_->MultiGetEntity(options, num_keys, column_families, keys, results,
                         statuses, sorted_input);
+  }
+
+  void MultiGetEntity(const ReadOptions& options, size_t num_keys,
+                      const Slice* keys,
+                      PinnableAttributeGroups* results) override {
+    db_->MultiGetEntity(options, num_keys, keys, results);
   }
 
   using DB::IngestExternalFile;
@@ -263,11 +279,25 @@ class StackableDB : public DB {
     return db_->NewIterators(options, column_families, iterators);
   }
 
-  using DB::NewMultiCfIterator;
-  std::unique_ptr<Iterator> NewMultiCfIterator(
+  using DB::NewCoalescingIterator;
+  std::unique_ptr<Iterator> NewCoalescingIterator(
       const ReadOptions& options,
       const std::vector<ColumnFamilyHandle*>& column_families) override {
-    return db_->NewMultiCfIterator(options, column_families);
+    return db_->NewCoalescingIterator(options, column_families);
+  }
+
+  using DB::NewAttributeGroupIterator;
+  std::unique_ptr<AttributeGroupIterator> NewAttributeGroupIterator(
+      const ReadOptions& options,
+      const std::vector<ColumnFamilyHandle*>& column_families) override {
+    return db_->NewAttributeGroupIterator(options, column_families);
+  }
+
+  using DB::NewMultiScan;
+  std::unique_ptr<MultiScan> NewMultiScan(
+      const ReadOptions& opts, ColumnFamilyHandle* column_family,
+      const MultiScanArgs& scan_opts) override {
+    return db_->NewMultiScan(opts, column_family, scan_opts);
   }
 
   const Snapshot* GetSnapshot() override { return db_->GetSnapshot(); }
@@ -397,7 +427,11 @@ class StackableDB : public DB {
 
   Status SyncWAL() override { return db_->SyncWAL(); }
 
+  using DB::FlushWAL;
   Status FlushWAL(bool sync) override { return db_->FlushWAL(sync); }
+  Status FlushWAL(const FlushWALOptions& options) override {
+    return db_->FlushWAL(options);
+  }
 
   Status LockWAL() override { return db_->LockWAL(); }
 
@@ -424,6 +458,12 @@ class StackableDB : public DB {
   void GetColumnFamilyMetaData(ColumnFamilyHandle* column_family,
                                ColumnFamilyMetaData* cf_meta) override {
     db_->GetColumnFamilyMetaData(column_family, cf_meta);
+  }
+
+  void GetColumnFamilyMetaData(ColumnFamilyHandle* column_family,
+                               const GetColumnFamilyMetaDataOptions& options,
+                               ColumnFamilyMetaData* metadata) override {
+    db_->GetColumnFamilyMetaData(column_family, options, metadata);
   }
 
   using DB::StartBlockCacheTrace;
@@ -486,27 +526,23 @@ class StackableDB : public DB {
     return db_->GetFullHistoryTsLow(column_family, ts_low);
   }
 
-  Status GetSortedWalFiles(VectorLogPtr& files) override {
+  Status GetNewestUserDefinedTimestamp(ColumnFamilyHandle* column_family,
+                                       std::string* newest_timestamp) override {
+    return db_->GetNewestUserDefinedTimestamp(column_family, newest_timestamp);
+  }
+
+  Status GetSortedWalFiles(VectorWalPtr& files) override {
     return db_->GetSortedWalFiles(files);
   }
 
   Status GetCurrentWalFile(
-      std::unique_ptr<LogFile>* current_log_file) override {
-    return db_->GetCurrentWalFile(current_log_file);
+      std::unique_ptr<WalFile>* current_wal_file) override {
+    return db_->GetCurrentWalFile(current_wal_file);
   }
 
   Status GetCreationTimeOfOldestFile(uint64_t* creation_time) override {
     return db_->GetCreationTimeOfOldestFile(creation_time);
   }
-
-  // WARNING: This API is planned for removal in RocksDB 7.0 since it does not
-  // operate at the proper level of abstraction for a key-value store, and its
-  // contract/restrictions are poorly documented. For example, it returns non-OK
-  // `Status` for non-bottommost files and files undergoing compaction. Since we
-  // do not plan to maintain it, the contract will likely remain underspecified
-  // until its removal. Any user is encouraged to read the implementation
-  // carefully and migrate away from it when possible.
-  Status DeleteFile(std::string name) override { return db_->DeleteFile(name); }
 
   Status GetDbIdentity(std::string& identity) const override {
     return db_->GetDbIdentity(identity);
@@ -542,6 +578,14 @@ class StackableDB : public DB {
       ColumnFamilyHandle* column_family, const Range* range, std::size_t n,
       TablePropertiesCollection* props) override {
     return db_->GetPropertiesOfTablesInRange(column_family, range, n, props);
+  }
+
+  using DB::GetPropertiesOfTablesByLevel;
+  Status GetPropertiesOfTablesByLevel(
+      ColumnFamilyHandle* column_family,
+      std::vector<std::unique_ptr<TablePropertiesCollection>>* props_by_level)
+      override {
+    return db_->GetPropertiesOfTablesByLevel(column_family, props_by_level);
   }
 
   Status GetUpdatesSince(

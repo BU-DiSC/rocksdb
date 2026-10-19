@@ -4182,35 +4182,6 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     NotifyOnCompactionBegin(c->column_family_data(), c.get(), status,
                             compaction_job_stats, job_context->job_id);
 
-    // Move files to next level
-    int32_t moved_files = 0;
-    int64_t moved_bytes = 0;
-    for (unsigned int l = 0; l < c->num_input_levels(); l++) {
-      if (c->level(l) == c->output_level()) {
-        continue;
-      }
-      for (size_t i = 0; i < c->num_input_files(l); i++) {
-        FileMetaData* f = c->input(l, i);
-        c->edit()->DeleteFile(c->level(l), f->fd.GetNumber());
-        c->edit()->AddFile(
-            c->output_level(), f->fd.GetNumber(), f->fd.GetPathId(),
-            f->fd.GetFileSize(), f->smallest, f->largest, f->fd.smallest_seqno,
-            f->fd.largest_seqno, f->marked_for_compaction, f->temperature,
-            f->oldest_blob_file_number, f->oldest_ancester_time,
-            f->file_creation_time, f->epoch_number, f->file_checksum,
-            f->file_checksum_func_name, f->unique_id,
-            f->compensated_range_deletion_size, f->tail_size,
-            f->user_defined_timestamps_persisted, f->fd.expiration_time);
-
-        ROCKS_LOG_BUFFER(
-            log_buffer,
-            "[%s] Moving #%" PRIu64 " to level-%d %" PRIu64 " bytes\n",
-            c->column_family_data()->GetName().c_str(), f->fd.GetNumber(),
-            c->output_level(), f->fd.GetFileSize());
-        ++moved_files;
-        moved_bytes += f->fd.GetFileSize();
-      }
-    }
     if (c->compaction_reason() == CompactionReason::kLevelMaxLevelSize &&
         c->immutable_options().compaction_pri == kRoundRobin) {
       int start_level = c->start_level();
@@ -4222,7 +4193,6 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
       }
     }
 
-    // Perform the trivial move
     size_t moved_files = 0;
     size_t moved_bytes = 0;
     status = PerformTrivialMove(*c.get(), log_buffer, compaction_released,
@@ -4241,7 +4211,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
           << "total_files_size" << moved_bytes;
     }
     ROCKS_LOG_BUFFER(
-        log_buffer, "[%s] Moved #%d files to level-%zu %zu bytes %s: %s\n",
+        log_buffer, "[%s] Moved #%zu files to level-%zu %zu bytes %s: %s\n",
         c->column_family_data()->GetName().c_str(), moved_files,
         c->output_level(), moved_bytes, status.ToString().c_str(),
         c->column_family_data()->current()->storage_info()->LevelSummary(&tmp));

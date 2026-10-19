@@ -1536,8 +1536,9 @@ Status CompactionJob::ProcessKeyValue(
           tombstone_time +
               GetLevelDPT(
                   tombstone_dpt, sub_compact->compaction->output_level(),
-                  sub_compact->compaction->immutable_options()->num_levels,
-                  mutable_cf_options->max_bytes_for_level_multiplier));
+                  sub_compact->compaction->immutable_options().num_levels,
+                  sub_compact->compaction->mutable_cf_options()
+                  .max_bytes_for_level_multiplier));
     }
 
     if (c_iter->iter_stats().num_input_records % kRecordStatsEvery ==

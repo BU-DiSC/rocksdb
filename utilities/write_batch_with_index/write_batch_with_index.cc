@@ -456,16 +456,15 @@ Status WriteBatchWithIndex::Delete(ColumnFamilyHandle* column_family,
 
 Status WriteBatchWithIndex::Delete(ColumnFamilyHandle* column_family,
                                    const Slice& key, uint64_t dpt) {
-  auto dbo = static_cast_with_check<ColumnFamilyHandleImpl>(column_family)
-                 ->db()
-                 ->immutable_db_options();
-  ROCKS_LOG_INFO(dbo.info_log, "(FADE) WriteBatchWithIndex::Delete with DPT: %ld",
-                 dpt);
-  rep->SetLastEntryOffset();
+  size_t last_entry_offset = rep->write_batch.GetDataSize();
+
   auto s = rep->write_batch.Delete(column_family, key, dpt);
+
   if (s.ok()) {
-    rep->AddOrUpdateIndex(column_family, key, kDeleteRecord);
+    rep->AddOrUpdateIndex(column_family, key, kDeleteRecord,
+                          last_entry_offset);
   }
+
   return s;
 }
 

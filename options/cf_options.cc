@@ -446,6 +446,10 @@ static std::unordered_map<std::string, OptionTypeInfo>
          {offsetof(struct MutableCFOptions, periodic_compaction_seconds),
           OptionType::kUInt64T, OptionVerificationType::kNormal,
           OptionTypeFlags::kMutable}},
+        {"delete_persistence_threshold",
+         {offsetof(struct MutableCFOptions, delete_persistence_threshold),
+          OptionType::kUInt64T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kMutable}},
         {"bottommost_temperature",
          {0, OptionType::kTemperature, OptionVerificationType::kDeprecated,
           OptionTypeFlags::kMutable}},
@@ -1108,6 +1112,8 @@ void MutableCFOptions::Dump(Logger* log) const {
                  ttl);
   ROCKS_LOG_INFO(log, "              periodic_compaction_seconds: %" PRIu64,
                  periodic_compaction_seconds);
+  ROCKS_LOG_INFO(log, "             delete_persistence_threshold: %" PRIu64,
+                 delete_persistence_threshold);
   ROCKS_LOG_INFO(log, "                   paranoid_memory_checks: %d",
                  paranoid_memory_checks);
   std::string result;

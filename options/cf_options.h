@@ -139,6 +139,7 @@ struct MutableCFOptions {
         max_bytes_for_level_multiplier(options.max_bytes_for_level_multiplier),
         ttl(options.ttl),
         periodic_compaction_seconds(options.periodic_compaction_seconds),
+        delete_persistence_threshold(options.delete_persistence_threshold),
         max_bytes_for_level_multiplier_additional(
             options.max_bytes_for_level_multiplier_additional),
         compaction_options_fifo(options.compaction_options_fifo),
@@ -204,6 +205,7 @@ struct MutableCFOptions {
         max_bytes_for_level_multiplier(0),
         ttl(0),
         periodic_compaction_seconds(0),
+        delete_persistence_threshold(0),
         compaction_options_fifo(),
         enable_blob_files(false),
         min_blob_size(0),
@@ -290,6 +292,7 @@ struct MutableCFOptions {
   double max_bytes_for_level_multiplier;
   uint64_t ttl;
   uint64_t periodic_compaction_seconds;
+  uint64_t delete_persistence_threshold;
   std::vector<int> max_bytes_for_level_multiplier_additional;
   CompactionOptionsFIFO compaction_options_fifo;
   CompactionOptionsUniversal compaction_options_universal;

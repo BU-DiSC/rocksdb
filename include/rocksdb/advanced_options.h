@@ -794,6 +794,30 @@ struct AdvancedColumnFamilyOptions {
   // Dynamically changeable through SetOptions() API
   uint64_t periodic_compaction_seconds = 0xfffffffffffffffe;
 
+  // Delete persistence threshold (D_th) in seconds, after FADE in Lethe
+  // (Sarkar et al., SIGMOD 2020). When non-zero, every point or range
+  // tombstone flushed to this column family is compacted down to the last
+  // non-empty level within roughly this many seconds of being written, so
+  // the data it deletes is physically removed within the threshold.
+  //
+  // Each tree level gets an exponentially growing share of the threshold
+  // (d_0 = D_th * (T - 1) / (T^L - 1), d_i = T * d_{i-1}, with T =
+  // max_bytes_for_level_multiplier and L the number of non-empty levels).
+  // Files whose oldest tombstone has outlived the cumulative share of their
+  // level are compacted to the next level with
+  // CompactionReason::kDeletePersistence before other compactions.
+  //
+  // Tombstone write times come from the seqno-to-time mapping, which is
+  // recorded automatically while this option is set. Tombstones written
+  // before the option was set use the file's oldest ancestor time instead.
+  //
+  // Only supported with kCompactionStyleLevel; ignored otherwise.
+  //
+  // Default: 0 (disabled)
+  //
+  // Dynamically changeable through SetOptions() API
+  uint64_t delete_persistence_threshold = 0;
+
   // If this option is set then 1 in N blocks are compressed
   // using a fast (lz4) and slow (zstd) compression algorithm.
   // The compressibility is reported as stats and the stored

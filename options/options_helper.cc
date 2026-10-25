@@ -256,6 +256,7 @@ void UpdateColumnFamilyOptions(const MutableCFOptions& moptions,
       moptions.max_bytes_for_level_multiplier;
   cf_opts->ttl = moptions.ttl;
   cf_opts->periodic_compaction_seconds = moptions.periodic_compaction_seconds;
+  cf_opts->delete_persistence_threshold = moptions.delete_persistence_threshold;
 
   cf_opts->max_bytes_for_level_multiplier_additional.clear();
   for (auto value : moptions.max_bytes_for_level_multiplier_additional) {

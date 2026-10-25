@@ -92,6 +92,7 @@ AdvancedColumnFamilyOptions::AdvancedColumnFamilyOptions(const Options& options)
       report_bg_io_stats(options.report_bg_io_stats),
       ttl(options.ttl),
       periodic_compaction_seconds(options.periodic_compaction_seconds),
+      delete_persistence_threshold(options.delete_persistence_threshold),
       sample_for_compression(options.sample_for_compression),
       last_level_temperature(options.last_level_temperature),
       default_write_temperature(options.default_write_temperature),
@@ -418,6 +419,9 @@ void ColumnFamilyOptions::Dump(Logger* log) const {
     ROCKS_LOG_HEADER(log,
                      "         Options.periodic_compaction_seconds: %" PRIu64,
                      periodic_compaction_seconds);
+    ROCKS_LOG_HEADER(log,
+                     "        Options.delete_persistence_threshold: %" PRIu64,
+                     delete_persistence_threshold);
     const auto& it_temp = temperature_to_string.find(default_temperature);
     std::string str_default_temperature;
     if (it_temp == temperature_to_string.end()) {

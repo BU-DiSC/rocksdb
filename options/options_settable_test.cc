@@ -557,6 +557,7 @@ TEST_F(OptionsSettableTest, ColumnFamilyOptionsAllFieldsSettable) {
       "report_bg_io_stats=true;"
       "ttl=60;"
       "periodic_compaction_seconds=3600;"
+      "delete_persistence_threshold=7200;"
       "sample_for_compression=0;"
       "enable_blob_files=true;"
       "min_blob_size=256;"

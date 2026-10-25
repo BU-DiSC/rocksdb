@@ -478,6 +478,7 @@ TEST_MAIN_SOURCES =                                                     \
   db/db_clip_test.cc                                                    \
   db/db_dynamic_level_test.cc                                           \
   db/db_encryption_test.cc                                              \
+  db/db_fade_test.cc                                                    \
   db/db_flush_test.cc                                                   \
   db/db_follower_test.cc						\
   db/db_readonly_with_timestamp_test.cc                                 \

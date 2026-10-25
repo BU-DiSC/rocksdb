@@ -1518,6 +1518,9 @@ db_clip_test: $(OBJ_DIR)/db/db_clip_test.o $(TEST_LIBRARY) $(LIBRARY)
 db_dynamic_level_test: $(OBJ_DIR)/db/db_dynamic_level_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
+db_fade_test: $(OBJ_DIR)/db/db_fade_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
 db_flush_test: $(OBJ_DIR)/db/db_flush_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 

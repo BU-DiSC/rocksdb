@@ -37,6 +37,7 @@
 #include "db/db_iter.h"
 #include "db/dbformat.h"
 #include "db/error_handler.h"
+#include "db/fade.h"
 #include "db/event_helpers.h"
 #include "db/external_sst_file_ingestion_job.h"
 #include "db/flush_job.h"
@@ -996,28 +997,76 @@ void DBImpl::TriggerCompaction() {
     return;
   }
   TEST_SYNC_POINT("DBImpl::TriggerCompaction:StartRunning");
-  InstrumentedMutexLock l(&mutex_);
-  bool enqueued = false;
-  for (auto cfd : *versions_->GetColumnFamilySet()) {
-    if (cfd->IsDropped() || !cfd->initialized()) {
-      continue;
+  int64_t temp_current_time = 0;
+  if (!immutable_db_options_.clock->GetCurrentTime(&temp_current_time).ok()) {
+    return;
+  }
+  const uint64_t current_time = static_cast<uint64_t>(temp_current_time);
+
+  // Column families whose mutable memtable holds a tombstone past the L0
+  // deadline. Memtable time counts towards L0, so flushing then lets the
+  // picker move the tombstone on right away.
+  autovector<ColumnFamilyData*> cfds_to_flush;
+  {
+    InstrumentedMutexLock l(&mutex_);
+    bool enqueued = false;
+    for (auto cfd : *versions_->GetColumnFamilySet()) {
+      if (cfd->IsDropped() || !cfd->initialized()) {
+        continue;
+      }
+      const MutableCFOptions* mutable_cf_options =
+          cfd->GetLatestMutableCFOptions();
+      if (mutable_cf_options->delete_persistence_threshold == 0) {
+        continue;
+      }
+      VersionStorageInfo* vstorage = cfd->current()->storage_info();
+      int last_level = 0;
+      const std::vector<uint64_t> deadlines =
+          vstorage->FadeDeadlines(*mutable_cf_options, &last_level);
+      if (!deadlines.empty() &&
+          IsTombstoneExpired(cfd->mem()->ApproximateOldestTombstoneTime(),
+                             current_time, deadlines[0])) {
+        cfd->Ref();
+        cfds_to_flush.push_back(cfd);
+      }
+      if (mutable_cf_options->disable_auto_compactions) {
+        continue;
+      }
+      // Recompute so that newly expired tombstones are seen.
+      vstorage->ComputeCompactionScore(*cfd->ioptions(), *mutable_cf_options);
+      if (cfd->NeedsCompaction()) {
+        EnqueuePendingCompaction(cfd);
+        enqueued = true;
+      }
     }
-    const MutableCFOptions* mutable_cf_options =
-        cfd->GetLatestMutableCFOptions();
-    if (mutable_cf_options->delete_persistence_threshold == 0 ||
-        mutable_cf_options->disable_auto_compactions) {
-      continue;
-    }
-    // Recompute so that newly expired tombstones are seen.
-    cfd->current()->storage_info()->ComputeCompactionScore(
-        *cfd->ioptions(), *mutable_cf_options);
-    if (cfd->NeedsCompaction()) {
-      EnqueuePendingCompaction(cfd);
-      enqueued = true;
+    if (enqueued) {
+      MaybeScheduleFlushOrCompaction();
     }
   }
-  if (enqueued) {
-    MaybeScheduleFlushOrCompaction();
+
+  if (cfds_to_flush.empty()) {
+    return;
+  }
+  FlushOptions flush_options;
+  flush_options.wait = false;
+  flush_options.allow_write_stall = true;
+  Status s;
+  if (immutable_db_options_.atomic_flush) {
+    s = AtomicFlushMemTables(flush_options, FlushReason::kDeletePersistence,
+                             cfds_to_flush);
+  } else {
+    for (ColumnFamilyData* cfd : cfds_to_flush) {
+      s.UpdateIfOk(
+          FlushMemTable(cfd, flush_options, FlushReason::kDeletePersistence));
+    }
+  }
+  if (!s.ok()) {
+    ROCKS_LOG_WARN(immutable_db_options_.info_log,
+                   "Delete persistence flush failed: %s", s.ToString().c_str());
+  }
+  InstrumentedMutexLock l(&mutex_);
+  for (ColumnFamilyData* cfd : cfds_to_flush) {
+    cfd->UnrefAndTryDelete();
   }
 }
 

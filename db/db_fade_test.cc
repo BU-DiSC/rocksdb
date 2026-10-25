@@ -60,7 +60,7 @@ TEST(FadeExpiryTest, Boundary) {
   ASSERT_TRUE(IsTombstoneExpired(1000, 1011, 10));
 }
 
-// Counts compactions by reason.
+// Counts compactions and flushes by reason.
 class CompactionReasonListener : public EventListener {
  public:
   void OnCompactionCompleted(DB* /*db*/, const CompactionJobInfo& ci) override {
@@ -68,14 +68,25 @@ class CompactionReasonListener : public EventListener {
     counts_[ci.compaction_reason]++;
   }
 
+  void OnFlushCompleted(DB* /*db*/, const FlushJobInfo& fi) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    flush_counts_[fi.flush_reason]++;
+  }
+
   int Count(CompactionReason reason) {
     std::lock_guard<std::mutex> lock(mutex_);
     return counts_[reason];
   }
 
+  int Count(FlushReason reason) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return flush_counts_[reason];
+  }
+
  private:
   std::mutex mutex_;
   std::map<CompactionReason, int> counts_;
+  std::map<FlushReason, int> flush_counts_;
 };
 
 class DBFadeTest : public DBTestBase {
@@ -156,12 +167,13 @@ TEST_F(DBFadeTest, FlushRecordsOldestTombstoneTime) {
   Sleep(10 * kCadence);
   const uint64_t put_time = Now();
   ASSERT_OK(Put("a", "v"));
-  Sleep(10 * kCadence);
+  Sleep(2 * kCadence);
   const uint64_t delete_time = Now();
   ASSERT_OK(Delete("b"));
-  Sleep(10 * kCadence);
+  Sleep(2 * kCadence);
   ASSERT_OK(Delete("c"));
-  Sleep(10 * kCadence);
+  // Flush before the L0 deadline (90s) so that FADE does not flush first.
+  Sleep(2 * kCadence);
   ASSERT_OK(Flush());
 
   ASSERT_OK(Put("d", "v"));
@@ -280,6 +292,46 @@ TEST_F(DBFadeTest, TombstonesReachLastLevelWithoutWrites) {
   ASSERT_EQ("0,0,0,1", FilesPerLevel());
   ASSERT_EQ(Files()[3][0].num_deletions, 0u);
   ASSERT_EQ("NOT_FOUND", Get("b"));
+}
+
+TEST_F(DBFadeTest, FlushesMemtableWithExpiredTombstone) {
+  Options options = FadeOptions();
+  options.disable_auto_compactions = false;
+  options.level0_file_num_compaction_trigger = 10;
+  options.max_bytes_for_level_multiplier = 2;
+  auto listener = std::make_shared<CompactionReasonListener>();
+  options.listeners.push_back(listener);
+  DestroyAndReopen(options);
+
+  ASSERT_OK(Put("a", "v"));
+  ASSERT_OK(Put("b", "v"));
+  ASSERT_OK(Put("z", "v"));
+  ASSERT_OK(Flush());
+  MoveFilesToLevel(3);
+
+  // The tombstone stays in the memtable: no flush, no further writes.
+  Sleep(10 * kCadence);
+  ASSERT_OK(Delete("b"));
+  Sleep(kDth + 4 * kCadence);
+  ASSERT_OK(dbfull()->TEST_WaitForFlushMemTable());
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+
+  ASSERT_EQ(listener->Count(FlushReason::kDeletePersistence), 1);
+  ASSERT_EQ("0,0,0,1", FilesPerLevel());
+  ASSERT_EQ(Files()[3][0].num_deletions, 0u);
+  ASSERT_EQ("NOT_FOUND", Get("b"));
+}
+
+TEST_F(DBFadeTest, MemtableWithoutTombstoneNotFlushed) {
+  Options options = FadeOptions();
+  auto listener = std::make_shared<CompactionReasonListener>();
+  options.listeners.push_back(listener);
+  DestroyAndReopen(options);
+
+  ASSERT_OK(Put("a", "v"));
+  Sleep(2 * kDth);
+  ASSERT_EQ(listener->Count(FlushReason::kDeletePersistence), 0);
+  ASSERT_EQ("", FilesPerLevel());
 }
 
 TEST_F(DBFadeTest, ZeroThresholdNeverPicks) {

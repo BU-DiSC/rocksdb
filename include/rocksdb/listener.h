@@ -186,6 +186,9 @@ enum class FlushReason : int {
   kWalFull = 0xd,
   // SwitchMemtable will not be called for this flush reason.
   kCatchUpAfterErrorRecovery = 0xe,
+  // A memtable tombstone is about to outlive its FADE deadline, see
+  // ColumnFamilyOptions::delete_persistence_threshold.
+  kDeletePersistence = 0xf,
 };
 
 const char* GetFlushReasonString(FlushReason flush_reason);

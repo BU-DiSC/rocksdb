@@ -517,6 +517,11 @@ class MemTable {
     return oldest_key_time_.load(std::memory_order_relaxed);
   }
 
+  // Time the first tombstone (point or range) was added, or 0 if none.
+  uint64_t ApproximateOldestTombstoneTime() const {
+    return oldest_tombstone_time_.load(std::memory_order_relaxed);
+  }
+
   // REQUIRES: db_mutex held.
   void SetID(uint64_t id) { id_ = id; }
 
@@ -643,6 +648,10 @@ class MemTable {
   // Timestamp of oldest key
   std::atomic<uint64_t> oldest_key_time_;
 
+  // Timestamp of oldest tombstone, 0 if none. Used by FADE to flush a
+  // memtable before its tombstones outlive their deadline.
+  std::atomic<uint64_t> oldest_tombstone_time_;
+
   // Memtable id to track flush.
   uint64_t id_ = 0;
 
@@ -680,6 +689,8 @@ class MemTable {
   void UpdateFlushState();
 
   void UpdateOldestKeyTime();
+
+  void UpdateOldestTombstoneTime();
 
   void GetFromTable(const LookupKey& key,
                     SequenceNumber max_covering_tombstone_seq, bool do_merge,

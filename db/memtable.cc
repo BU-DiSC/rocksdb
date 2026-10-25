@@ -118,6 +118,7 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
       insert_with_hint_prefix_extractor_(
           ioptions.memtable_insert_with_hint_prefix_extractor.get()),
       oldest_key_time_(std::numeric_limits<uint64_t>::max()),
+      oldest_tombstone_time_(0),
       atomic_flush_seqno_(kMaxSequenceNumber),
       approximate_memory_usage_(0),
       memtable_max_range_deletions_(
@@ -269,6 +270,21 @@ void MemTable::UpdateOldestKeyTime() {
       // If fail, the timestamp is already set.
       oldest_key_time_.compare_exchange_strong(
           oldest_key_time, static_cast<uint64_t>(current_time),
+          std::memory_order_relaxed, std::memory_order_relaxed);
+    }
+  }
+}
+
+void MemTable::UpdateOldestTombstoneTime() {
+  uint64_t oldest_tombstone_time =
+      oldest_tombstone_time_.load(std::memory_order_relaxed);
+  if (oldest_tombstone_time == 0) {
+    int64_t current_time = 0;
+    auto s = clock_->GetCurrentTime(&current_time);
+    if (s.ok() && current_time > 0) {
+      // If fail, the timestamp is already set.
+      oldest_tombstone_time_.compare_exchange_strong(
+          oldest_tombstone_time, static_cast<uint64_t>(current_time),
           std::memory_order_relaxed, std::memory_order_relaxed);
     }
   }
@@ -898,6 +914,10 @@ Status MemTable::Add(SequenceNumber s, ValueType type,
         (cur_earliest_seqno == kMaxSequenceNumber || s < cur_earliest_seqno) &&
         !earliest_seqno_.compare_exchange_weak(cur_earliest_seqno, s)) {
     }
+  }
+  if (type == kTypeDeletion || type == kTypeSingleDeletion ||
+      type == kTypeDeletionWithTimestamp || type == kTypeRangeDeletion) {
+    UpdateOldestTombstoneTime();
   }
   if (type == kTypeRangeDeletion) {
     auto new_cache = std::make_shared<FragmentedRangeTombstoneListCache>();

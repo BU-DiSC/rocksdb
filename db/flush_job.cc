@@ -81,6 +81,8 @@ const char* GetFlushReasonString(FlushReason flush_reason) {
       return "WAL Full";
     case FlushReason::kCatchUpAfterErrorRecovery:
       return "Catch Up After Error Recovery";
+    case FlushReason::kDeletePersistence:
+      return "Delete Persistence";
     default:
       return "Invalid";
   }

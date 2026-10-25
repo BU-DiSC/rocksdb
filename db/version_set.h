@@ -215,6 +215,12 @@ class VersionStorageInfo {
   void ComputeExpiredTtlFiles(const ImmutableOptions& ioptions,
                               const uint64_t ttl);
 
+  // FADE cumulative deadlines, in seconds, for each tree level: L0 first, then
+  // the base level through the last non-empty level. Empty when FADE is off.
+  // Sets *last_level to the LSM level of the last tree level.
+  std::vector<uint64_t> FadeDeadlines(
+      const MutableCFOptions& mutable_cf_options, int* last_level) const;
+
   // This computes files_with_expired_tombstones_ and is called by
   // ComputeCompactionScore(). A file has expired tombstones when its oldest
   // tombstone outlived the FADE deadline of its tree level (see db/fade.h).

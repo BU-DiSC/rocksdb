@@ -3684,13 +3684,36 @@ void VersionStorageInfo::ComputeExpiredTtlFiles(
   }
 }
 
+std::vector<uint64_t> VersionStorageInfo::FadeDeadlines(
+    const MutableCFOptions& mutable_cf_options, int* last_level) const {
+  assert(last_level != nullptr);
+  const uint64_t dth = mutable_cf_options.delete_persistence_threshold;
+  if (dth == 0 || compaction_style_ != CompactionStyle::kCompactionStyleLevel ||
+      base_level_ < 1) {
+    return {};
+  }
+  // With no data below L0, the base level is the (empty) last tree level so
+  // that L0 tombstones still have a deadline.
+  *last_level = base_level_;
+  for (int level = num_levels() - 1; level > base_level_; level--) {
+    if (!files_[level].empty()) {
+      *last_level = level;
+      break;
+    }
+  }
+  const int num_tree_levels = 1 + *last_level - base_level_ + 1;
+  return FadeLevelDeadlines(
+      dth, mutable_cf_options.max_bytes_for_level_multiplier, num_tree_levels);
+}
+
 void VersionStorageInfo::ComputeFilesWithExpiredTombstones(
     const ImmutableOptions& ioptions,
     const MutableCFOptions& mutable_cf_options) {
   files_with_expired_tombstones_.clear();
-  const uint64_t dth = mutable_cf_options.delete_persistence_threshold;
-  if (dth == 0 || compaction_style_ != CompactionStyle::kCompactionStyleLevel ||
-      base_level_ < 1) {
+  int last_level = 0;
+  const std::vector<uint64_t> deadlines =
+      FadeDeadlines(mutable_cf_options, &last_level);
+  if (deadlines.empty()) {
     return;
   }
 
@@ -3700,20 +3723,6 @@ void VersionStorageInfo::ComputeFilesWithExpiredTombstones(
     return;
   }
   const uint64_t current_time = static_cast<uint64_t>(temp_current_time);
-
-  // The tree levels are L0 followed by base_level_ through the last non-empty
-  // level. With no data below L0, the base level is the (empty) last tree
-  // level so that L0 tombstones still have a deadline.
-  int last_level = base_level_;
-  for (int level = num_levels() - 1; level > base_level_; level--) {
-    if (!files_[level].empty()) {
-      last_level = level;
-      break;
-    }
-  }
-  const int num_tree_levels = 1 + last_level - base_level_ + 1;
-  const std::vector<uint64_t> deadlines = FadeLevelDeadlines(
-      dth, mutable_cf_options.max_bytes_for_level_multiplier, num_tree_levels);
 
   // Files in the last tree level have nowhere further down to go.
   for (int level = 0; level < last_level; level++) {

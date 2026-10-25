@@ -7461,6 +7461,8 @@ class CompactionReasonJni {
         return 0x12;
       case ROCKSDB_NAMESPACE::CompactionReason::kRefitLevel:
         return 0x13;
+      case ROCKSDB_NAMESPACE::CompactionReason::kDeletePersistence:
+        return 0x14;
       default:
         return 0x7F;  // undefined
     }
@@ -7511,6 +7513,8 @@ class CompactionReasonJni {
         return ROCKSDB_NAMESPACE::CompactionReason::kRoundRobinTtl;
       case 0x13:
         return ROCKSDB_NAMESPACE::CompactionReason::kRefitLevel;
+      case 0x14:
+        return ROCKSDB_NAMESPACE::CompactionReason::kDeletePersistence;
       default:
         // undefined/default
         return ROCKSDB_NAMESPACE::CompactionReason::kUnknown;

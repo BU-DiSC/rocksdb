@@ -60,6 +60,24 @@ TEST(FadeExpiryTest, Boundary) {
   ASSERT_TRUE(IsTombstoneExpired(1000, 1011, 10));
 }
 
+// Counts compactions by reason.
+class CompactionReasonListener : public EventListener {
+ public:
+  void OnCompactionCompleted(DB* /*db*/, const CompactionJobInfo& ci) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    counts_[ci.compaction_reason]++;
+  }
+
+  int Count(CompactionReason reason) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return counts_[reason];
+  }
+
+ private:
+  std::mutex mutex_;
+  std::map<CompactionReason, int> counts_;
+};
+
 class DBFadeTest : public DBTestBase {
  public:
   DBFadeTest() : DBTestBase("db_fade_test", /*env_do_fsync=*/false) {
@@ -105,6 +123,7 @@ class DBFadeTest : public DBTestBase {
     options.compaction_style = kCompactionStyleLevel;
     options.delete_persistence_threshold = kDth;
     options.disable_auto_compactions = true;
+    options.level_compaction_dynamic_level_bytes = false;
     options.num_levels = 4;
     return options;
   }
@@ -200,6 +219,60 @@ TEST_F(DBFadeTest, CompactionKeepsOldestTombstoneTime) {
   const uint64_t t = Files()[1][0].oldest_tombstone_time;
   ASSERT_LE(t, first_delete);
   ASSERT_EQ(t, flushed_time);
+}
+
+TEST_F(DBFadeTest, PicksExpiredL0File) {
+  Options options = FadeOptions();
+  options.disable_auto_compactions = false;
+  options.level0_file_num_compaction_trigger = 10;
+  // Four tree levels with T = 2: deadlines {66, 200, 466, 1000}.
+  options.max_bytes_for_level_multiplier = 2;
+  auto listener = std::make_shared<CompactionReasonListener>();
+  options.listeners.push_back(listener);
+  DestroyAndReopen(options);
+
+  ASSERT_OK(Put("a", "v"));
+  ASSERT_OK(Put("z", "v"));
+  ASSERT_OK(Flush());
+  MoveFilesToLevel(3);
+
+  Sleep(10 * kCadence);
+  ASSERT_OK(Delete("b"));
+  ASSERT_OK(Flush());
+  Sleep(100);
+
+  // A new version recomputes the expired files.
+  ASSERT_OK(Put("q", "v"));
+  ASSERT_OK(Flush());
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+
+  ASSERT_EQ(listener->Count(CompactionReason::kDeletePersistence), 1);
+  // The tombstone moved to L1, where its deadline has not passed yet.
+  ASSERT_EQ("1,1,0,1", FilesPerLevel());
+}
+
+TEST_F(DBFadeTest, ZeroThresholdNeverPicks) {
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  options.disable_auto_compactions = false;
+  options.level0_file_num_compaction_trigger = 10;
+  auto listener = std::make_shared<CompactionReasonListener>();
+  options.listeners.push_back(listener);
+  DestroyAndReopen(options);
+
+  ASSERT_OK(Put("a", "v"));
+  ASSERT_OK(Put("z", "v"));
+  ASSERT_OK(Flush());
+  MoveFilesToLevel(3);
+  ASSERT_OK(Delete("b"));
+  ASSERT_OK(Flush());
+  mock_clock_->MockSleepForSeconds(10 * static_cast<int>(kDth));
+  ASSERT_OK(Put("q", "v"));
+  ASSERT_OK(Flush());
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+
+  ASSERT_EQ(listener->Count(CompactionReason::kDeletePersistence), 0);
+  ASSERT_EQ("2,0,0,1", FilesPerLevel());
 }
 
 }  // namespace ROCKSDB_NAMESPACE

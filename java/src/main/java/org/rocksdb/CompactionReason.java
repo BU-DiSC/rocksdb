@@ -104,7 +104,12 @@ public enum CompactionReason {
   /**
    * Compaction by calling DBImpl::ReFitLevel
    */
-  kRefitLevel((byte) 0x13);
+  kRefitLevel((byte) 0x13),
+
+  /**
+   * A file's oldest tombstone outlived the FADE deadline of its level
+   */
+  kDeletePersistence((byte) 0x14);
 
   private final byte value;
 

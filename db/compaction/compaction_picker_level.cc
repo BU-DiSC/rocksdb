@@ -27,6 +27,9 @@ bool LevelCompactionPicker::NeedsCompaction(
   if (!vstorage->FilesMarkedForPeriodicCompaction().empty()) {
     return true;
   }
+  if (!vstorage->FilesWithExpiredTombstones().empty()) {
+    return true;
+  }
   if (!vstorage->BottommostFilesMarkedForCompaction().empty()) {
     return true;
   }
@@ -50,6 +53,7 @@ enum class CompactToNextLevel {
   kNo,   // compact to the same level as the input file
   kYes,  // compact to the next level except the last level to the same level
   kSkipLastLevel,  // compact to the next level but skip the last level
+  kAlways,  // compact to the next level, even past the last non-empty level
 };
 
 // A class to build a leveled compaction step-by-step.
@@ -182,8 +186,9 @@ void LevelCompactionBuilder::PickFileToCompact(
 
     // Compact to the next level only if the file is not in the last level and
     // compact_to_next_level is kYes or kSkipLastLevel.
-    if (compact_to_next_level != CompactToNextLevel::kNo &&
-        (start_level_ < vstorage_->num_non_empty_levels() - 1)) {
+    if (compact_to_next_level == CompactToNextLevel::kAlways ||
+        (compact_to_next_level != CompactToNextLevel::kNo &&
+         start_level_ < vstorage_->num_non_empty_levels() - 1)) {
       output_level_ =
           (start_level_ == 0) ? vstorage_->base_level() : start_level_ + 1;
     } else {
@@ -200,6 +205,17 @@ void LevelCompactionBuilder::PickFileToCompact(
 }
 
 void LevelCompactionBuilder::SetupInitialFiles() {
+  // FADE: expired tombstones take priority over level saturation, so that
+  // deletes persist within delete_persistence_threshold. The list never
+  // includes the last non-empty level, so the next level always exists.
+  parent_index_ = base_index_ = -1;
+  PickFileToCompact(vstorage_->FilesWithExpiredTombstones(),
+                    CompactToNextLevel::kAlways);
+  if (!start_level_inputs_.empty()) {
+    compaction_reason_ = CompactionReason::kDeletePersistence;
+    return;
+  }
+
   // Find the compactions by size on all levels.
   bool skipped_l0_to_base = false;
   for (int i = 0; i < compaction_picker_->NumberLevels() - 1; i++) {

@@ -6774,7 +6774,7 @@ Status VersionSet::WriteCurrentStateToManifest(
                        f->file_checksum_func_name, f->unique_id,
                        f->compensated_range_deletion_size, f->tail_size,
                        f->user_defined_timestamps_persisted);
-          edit.SetOldestTombstoneTimeOfLastFile(f->oldest_tombstone_time);
+          edit.SetTombstoneMetadataOfLastFile(*f);
         }
       }
 

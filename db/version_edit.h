@@ -18,6 +18,7 @@
 #include "db/blob/blob_file_addition.h"
 #include "db/blob/blob_file_garbage.h"
 #include "db/dbformat.h"
+#include "db/tombstone_dpt.h"
 #include "db/wal_edit.h"
 #include "memory/arena.h"
 #include "port/malloc.h"
@@ -97,6 +98,9 @@ enum NewFileCustomTag : uint32_t {
   // FADE: write time of the oldest tombstone in the file. Numbered away from
   // the upstream sequence to avoid colliding with future upstream tags.
   kOldestTombstoneTime = 40,
+  // FADE: delete persistence thresholds of the file's tombstones that have
+  // their own (TombstoneDptMap).
+  kTombstoneDpts = 41,
 
   // If this bit for the custom tag is set, opening DB should fail if
   // we don't know this field.
@@ -270,6 +274,11 @@ struct FileMetaData {
   // written. 0 if the file has no tombstones or the time is unknown.
   uint64_t oldest_tombstone_time = 0;
 
+  // FADE: thresholds of the file's tombstones that were written with their
+  // own delete persistence threshold
+  // (WriteBatch::PutDeletePersistenceThreshold), by sequence number.
+  TombstoneDptMap tombstone_dpts;
+
   FileMetaData() = default;
 
   FileMetaData(uint64_t file, uint32_t file_path_id, uint64_t file_size,
@@ -303,18 +312,23 @@ struct FileMetaData {
 
   // REQUIRED: Keys must be given to the function in sorted order (it expects
   // the last key to be the largest).
+  // `source_dpts`, if not null, holds the thresholds of the tombstones being
+  // written; a tombstone's threshold is copied to tombstone_dpts.
   Status UpdateBoundaries(const Slice& key, const Slice& value,
-                          SequenceNumber seqno, ValueType value_type);
+                          SequenceNumber seqno, ValueType value_type,
+                          const TombstoneDptMap* source_dpts = nullptr);
 
   // Unlike UpdateBoundaries, ranges do not need to be presented in any
   // particular order.
   void UpdateBoundariesForRange(const InternalKey& start,
                                 const InternalKey& end, SequenceNumber seqno,
-                                const InternalKeyComparator& icmp) {
+                                const InternalKeyComparator& icmp,
+                                const TombstoneDptMap* source_dpts = nullptr) {
     if (smallest.size() == 0 || icmp.Compare(start, smallest) < 0) {
       smallest = start;
     }
     oldest_tombstone_seqno = std::min(oldest_tombstone_seqno, seqno);
+    AddTombstoneDpt(seqno, source_dpts);
     if (largest.size() == 0 || icmp.Compare(largest, end) < 0) {
       largest = end;
     }
@@ -322,6 +336,11 @@ struct FileMetaData {
     fd.smallest_seqno = std::min(fd.smallest_seqno, seqno);
     fd.largest_seqno = std::max(fd.largest_seqno, seqno);
   }
+
+  // Copies the threshold of the tombstone with sequence number `seqno` from
+  // `source_dpts`, if it has one, to tombstone_dpts.
+  void AddTombstoneDpt(SequenceNumber seqno,
+                       const TombstoneDptMap* source_dpts);
 
   // Try to get oldest ancester time from the class itself or table properties
   // if table reader is already pinned.
@@ -511,11 +530,13 @@ class VersionEdit {
     }
   }
 
-  // Sets the FADE oldest tombstone time of the file most recently added with
-  // AddFile(). Used by call sites that add files field by field.
-  void SetOldestTombstoneTimeOfLastFile(uint64_t oldest_tombstone_time) {
+  // Copies the FADE tombstone metadata of `f` to the file most recently
+  // added with AddFile(). Used by call sites that add files field by field.
+  void SetTombstoneMetadataOfLastFile(const FileMetaData& f) {
     assert(!new_files_.empty());
-    new_files_.back().second.oldest_tombstone_time = oldest_tombstone_time;
+    FileMetaData& last = new_files_.back().second;
+    last.oldest_tombstone_time = f.oldest_tombstone_time;
+    last.tombstone_dpts = f.tombstone_dpts;
   }
 
   void AddFile(int level, const FileMetaData& f) {

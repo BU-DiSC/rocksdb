@@ -1872,7 +1872,7 @@ Status DBImpl::ReFitLevel(ColumnFamilyData* cfd, int level, int target_level) {
           f->file_checksum, f->file_checksum_func_name, f->unique_id,
           f->compensated_range_deletion_size, f->tail_size,
           f->user_defined_timestamps_persisted);
-      edit.SetOldestTombstoneTimeOfLastFile(f->oldest_tombstone_time);
+      edit.SetTombstoneMetadataOfLastFile(*f);
     }
     ROCKS_LOG_DEBUG(immutable_db_options_.info_log,
                     "[%s] Apply version edit:\n%s", cfd->GetName().c_str(),
@@ -3790,7 +3790,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
             f->file_checksum_func_name, f->unique_id,
             f->compensated_range_deletion_size, f->tail_size,
             f->user_defined_timestamps_persisted);
-        c->edit()->SetOldestTombstoneTimeOfLastFile(f->oldest_tombstone_time);
+        c->edit()->SetTombstoneMetadataOfLastFile(*f);
 
         ROCKS_LOG_BUFFER(
             log_buffer,

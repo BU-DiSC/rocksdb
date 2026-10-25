@@ -304,6 +304,26 @@ TombstoneDptMap MemTable::GetTombstoneDpts() const {
   return tombstone_dpts_;
 }
 
+void MemTable::InheritTombstoneMetadata(const MemTable& other) {
+  const uint64_t other_time = other.ApproximateOldestTombstoneTime();
+  if (other_time != 0) {
+    uint64_t time = oldest_tombstone_time_.load(std::memory_order_relaxed);
+    while ((time == 0 || other_time < time) &&
+           !oldest_tombstone_time_.compare_exchange_weak(
+               time, other_time, std::memory_order_relaxed,
+               std::memory_order_relaxed)) {
+    }
+  }
+  const TombstoneDptMap other_dpts = other.GetTombstoneDpts();
+  if (!other_dpts.Empty()) {
+    std::lock_guard<std::mutex> lock(tombstone_dpts_mutex_);
+    tombstone_dpts_.Merge(other_dpts);
+    if (tombstone_dpts_.Size() > kMaxTombstoneDpts) {
+      tombstone_dpts_.Shrink(kMaxTombstoneDpts / 2);
+    }
+  }
+}
+
 Status MemTable::VerifyEntryChecksum(const char* entry,
                                      uint32_t protection_bytes_per_key,
                                      bool allow_data_in_errors) {

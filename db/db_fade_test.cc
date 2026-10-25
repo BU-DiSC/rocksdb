@@ -316,6 +316,22 @@ class DBFadeTest : public DBTestBase {
     return cfh->cfd()->mem()->GetTombstoneDpts().entries();
   }
 
+  // Thresholds recorded in the default column family's active memtable and
+  // live files.
+  static TombstoneDptMap AllDpts(DB* db) {
+    auto* cfh = static_cast<ColumnFamilyHandleImpl*>(db->DefaultColumnFamily());
+    TombstoneDptMap all = cfh->cfd()->mem()->GetTombstoneDpts();
+    std::vector<std::vector<FileMetaData>> files;
+    static_cast_with_check<DBImpl>(db->GetRootDB())
+        ->TEST_GetFilesMetaData(db->DefaultColumnFamily(), &files);
+    for (const auto& level : files) {
+      for (const FileMetaData& f : level) {
+        all.Merge(f.tombstone_dpts);
+      }
+    }
+    return all;
+  }
+
   std::vector<std::vector<FileMetaData>> Files() {
     std::vector<std::vector<FileMetaData>> files;
     dbfull()->TEST_GetFilesMetaData(db_->DefaultColumnFamily(), &files);
@@ -582,13 +598,16 @@ TEST_F(DBFadeTest, MarkerSurvivesWalReplay) {
 
 class DBFadeTwoPhaseTest
     : public DBFadeTest,
-      public testing::WithParamInterface<TxnDBWritePolicy> {};
+      public testing::WithParamInterface<std::tuple<TxnDBWritePolicy, bool>> {};
 
-// A prepared transaction rebuilt during recovery keeps its marker. Only
-// WRITE_COMMITTED writes the memtable after recovery: replayed writes are
-// flushed during recovery, since 2PC forces avoid_flush_during_recovery off.
+// A transaction's marker survives a crash, whether the transaction committed
+// before it (replayed from the WAL) or commits after recovery (rebuilt from
+// its prepared section). Replayed writes are flushed during recovery, since
+// 2PC forces avoid_flush_during_recovery off, so the threshold may be in the
+// memtable or in an L0 file.
 TEST_P(DBFadeTwoPhaseTest, MarkerSurvivesRecovery) {
-  const TxnDBWritePolicy policy = GetParam();
+  const TxnDBWritePolicy policy = std::get<0>(GetParam());
+  const bool commit_before_crash = std::get<1>(GetParam());
   Options options = FadeOptions();
   options.delete_persistence_threshold = 0;
   DestroyAndReopen(options);
@@ -607,17 +626,22 @@ TEST_P(DBFadeTwoPhaseTest, MarkerSurvivesRecovery) {
   txn->PutLogData(WriteBatch::DeletePersistenceThresholdLogData(100, 5000));
   ASSERT_OK(txn->Delete("b"));
   ASSERT_OK(txn->Prepare());
+  if (commit_before_crash) {
+    ASSERT_OK(txn->Commit());
+  }
   delete txn;
   static_cast<PessimisticTransactionDB*>(txn_db)->TEST_Crash();
   txn_db_guard.reset();
 
   ASSERT_OK(TransactionDB::Open(options, txn_db_options, dbname_, &txn_db));
   txn_db_guard.reset(txn_db);
-  txn = txn_db->GetTransactionByName("t");
-  ASSERT_NE(txn, nullptr);
-  ASSERT_OK(txn->Commit());
-  delete txn;
-  auto entries = MemtableDpts(txn_db);
+  if (!commit_before_crash) {
+    txn = txn_db->GetTransactionByName("t");
+    ASSERT_NE(txn, nullptr);
+    ASSERT_OK(txn->Commit());
+    delete txn;
+  }
+  const auto entries = AllDpts(txn_db).entries();
   ASSERT_EQ(entries.size(), 1u);
   ASSERT_EQ(entries[0].first_seqno, entries[0].last_seqno);
   ASSERT_EQ(entries[0].dpt, 100u);
@@ -627,9 +651,72 @@ TEST_P(DBFadeTwoPhaseTest, MarkerSurvivesRecovery) {
   ASSERT_OK(txn_db->Get(ReadOptions(), "a", &value));
 }
 
-INSTANTIATE_TEST_CASE_P(
-    DBFadeTwoPhaseTest, DBFadeTwoPhaseTest,
-    testing::Values(WRITE_COMMITTED));
+INSTANTIATE_TEST_CASE_P(DBFadeTwoPhaseTest, DBFadeTwoPhaseTest,
+                        testing::Combine(testing::Values(WRITE_COMMITTED,
+                                                         WRITE_PREPARED),
+                                         testing::Bool()));
+
+TEST_F(DBFadeTest, FlushCarriesTombstoneDpts) {
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  DestroyAndReopen(options);
+  const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
+
+  WriteBatch batch;
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, 5000));
+  ASSERT_OK(batch.Delete("a"));            // first
+  ASSERT_OK(batch.DeleteRange("c", "d"));  // first + 1
+  ASSERT_OK(batch.Put("x", "v"));          // first + 2
+  ASSERT_OK(db_->Write(WriteOptions(), &batch));
+  ASSERT_OK(Delete("z"));  // first + 3, no threshold
+  ASSERT_OK(Flush());
+
+  TombstoneDptMap expected;
+  expected.Add(TombstoneDpt{first, first + 1, 100, 5000});
+  auto files = Files();
+  ASSERT_EQ(files[0].size(), 1u);
+  ASSERT_EQ(files[0][0].tombstone_dpts, expected);
+
+  Reopen(options);
+  files = Files();
+  ASSERT_EQ(files[0].size(), 1u);
+  ASSERT_EQ(files[0][0].tombstone_dpts, expected);
+}
+
+TEST_F(DBFadeTest, CompactionCarriesTombstoneDpts) {
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  DestroyAndReopen(options);
+  // Bottom data so that tombstones are not dropped when compacting to L1.
+  ASSERT_OK(Put("a", "v"));
+  ASSERT_OK(Put("z", "v"));
+  ASSERT_OK(Flush());
+  MoveFilesToLevel(3);
+
+  const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
+  WriteBatch batch;
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, 5000));
+  ASSERT_OK(batch.Delete("b"));  // first
+  ASSERT_OK(batch.Delete("e"));  // first + 1
+  ASSERT_OK(db_->Write(WriteOptions(), &batch));
+  ASSERT_OK(Flush());
+  WriteBatch batch2;
+  ASSERT_OK(batch2.PutDeletePersistenceThreshold(30, 6000));
+  ASSERT_OK(batch2.Delete("c"));            // first + 2
+  ASSERT_OK(batch2.DeleteRange("f", "g"));  // first + 3
+  // Shadows the tombstone of "b", which the compaction drops.
+  ASSERT_OK(batch2.Put("b", "v"));  // first + 4
+  ASSERT_OK(db_->Write(WriteOptions(), &batch2));
+  ASSERT_OK(Delete("d"));  // first + 5, no threshold
+  ASSERT_OK(Flush());
+
+  ASSERT_OK(dbfull()->TEST_CompactRange(0, nullptr, nullptr));
+  ASSERT_EQ("0,1,0,1", FilesPerLevel());
+  TombstoneDptMap expected;
+  expected.Add(TombstoneDpt{first + 1, first + 1, 100, 5000});
+  expected.Add(TombstoneDpt{first + 2, first + 3, 30, 6000});
+  ASSERT_EQ(Files()[1][0].tombstone_dpts, expected);
+}
 
 }  // namespace ROCKSDB_NAMESPACE
 

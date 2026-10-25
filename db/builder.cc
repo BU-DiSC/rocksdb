@@ -76,7 +76,7 @@ Status BuildTable(
     Env::WriteLifeTimeHint write_hint, const std::string* full_history_ts_low,
     BlobFileCompletionCallback* blob_callback, Version* version,
     uint64_t* num_input_entries, uint64_t* memtable_payload_bytes,
-    uint64_t* memtable_garbage_bytes) {
+    uint64_t* memtable_garbage_bytes, const TombstoneDptMap* tombstone_dpts) {
   assert((tboptions.column_family_id ==
           TablePropertiesCollectorFactory::Context::kUnknownColumnFamily) ==
          tboptions.column_family_name.empty());
@@ -265,7 +265,7 @@ Status BuildTable(
       builder->Add(key_after_flush, value_after_flush);
 
       s = meta->UpdateBoundaries(key_after_flush, value_after_flush,
-                                 ikey.sequence, ikey.type);
+                                 ikey.sequence, ikey.type, tombstone_dpts);
       if (!s.ok()) {
         break;
       }
@@ -301,7 +301,8 @@ Status BuildTable(
         builder->Add(kv.first.Encode(), kv.second);
         InternalKey tombstone_end = tombstone.SerializeEndKey();
         meta->UpdateBoundariesForRange(kv.first, tombstone_end, tombstone.seq_,
-                                       tboptions.internal_comparator);
+                                       tboptions.internal_comparator,
+                                       tombstone_dpts);
         if (version) {
           if (last_tombstone_start_user_key.empty() ||
               ucmp->CompareWithoutTimestamp(last_tombstone_start_user_key,
@@ -355,6 +356,7 @@ Status BuildTable(
       meta->marked_for_compaction = builder->NeedCompact();
       meta->user_defined_timestamps_persisted =
           ioptions.persist_user_defined_timestamps;
+      meta->tombstone_dpts.Shrink(TombstoneDptMap::kMaxEntriesPerFile);
       meta->oldest_tombstone_time = EstimateTombstoneTime(
           seqno_to_time_mapping.get(), meta->oldest_tombstone_seqno,
           meta->oldest_ancester_time != 0 ? meta->oldest_ancester_time

@@ -271,10 +271,17 @@ TEST_F(VersionEditTest, NewFile4NotSupportedField) {
   ASSERT_NOK(s);
 }
 
-TEST_F(VersionEditTest, EncodeDecodeOldestTombstoneTime) {
+TEST_F(VersionEditTest, EncodeDecodeTombstoneMetadata) {
   static_assert(NewFileCustomTag::kOldestTombstoneTime <
                     NewFileCustomTag::kCustomTagNonSafeIgnoreMask,
                 "older releases must be able to ignore the field");
+  static_assert(NewFileCustomTag::kTombstoneDpts <
+                    NewFileCustomTag::kCustomTagNonSafeIgnoreMask,
+                "older releases must be able to ignore the field");
+  FileMetaData tombstones;
+  tombstones.oldest_tombstone_time = 12345;
+  tombstones.tombstone_dpts.Add(TombstoneDpt{510, 520, 60, 12000});
+  tombstones.tombstone_dpts.Add(TombstoneDpt{530, 530, 30, 12100});
   VersionEdit edit;
   edit.AddFile(1, 300, 0, 100, InternalKey("foo", 500, kTypeValue),
                InternalKey("zoo", 600, kTypeDeletion), 500, 600, false,
@@ -282,7 +289,7 @@ TEST_F(VersionEditTest, EncodeDecodeOldestTombstoneTime) {
                kUnknownOldestAncesterTime, kUnknownFileCreationTime,
                300 /* epoch_number */, kUnknownFileChecksum,
                kUnknownFileChecksumFuncName, kNullUniqueId64x2, 0, 0, true);
-  edit.SetOldestTombstoneTimeOfLastFile(12345);
+  edit.SetTombstoneMetadataOfLastFile(tombstones);
   edit.AddFile(1, 301, 0, 100, InternalKey("foo", 501, kTypeValue),
                InternalKey("zoo", 601, kTypeValue), 501, 601, false,
                Temperature::kUnknown, kInvalidBlobFileNumber,
@@ -298,7 +305,38 @@ TEST_F(VersionEditTest, EncodeDecodeOldestTombstoneTime) {
   const auto& new_files = parsed.GetNewFiles();
   ASSERT_EQ(new_files.size(), 2u);
   ASSERT_EQ(new_files[0].second.oldest_tombstone_time, 12345u);
+  ASSERT_EQ(new_files[0].second.tombstone_dpts, tombstones.tombstone_dpts);
   ASSERT_EQ(new_files[1].second.oldest_tombstone_time, 0u);
+  ASSERT_TRUE(new_files[1].second.tombstone_dpts.Empty());
+  ASSERT_NE(edit.DebugString().find("tombstone_dpt:[510,520] dpt 60 at 12000"),
+            std::string::npos);
+  ASSERT_NE(edit.DebugJSON(0).find("[510,520]:60@12000 [530,530]:30@12100"),
+            std::string::npos);
+}
+
+TEST_F(VersionEditTest, UpdateBoundariesCopiesTombstoneDpts) {
+  TombstoneDptMap source;
+  source.Add(TombstoneDpt{10, 20, 60, 1000});
+  source.Add(TombstoneDpt{30, 30, 5, 2000});
+  const InternalKeyComparator icmp(BytewiseComparator());
+  FileMetaData meta;
+  ASSERT_OK(meta.UpdateBoundaries(InternalKey("a", 15, kTypeDeletion).Encode(),
+                                  Slice(), 15, kTypeDeletion, &source));
+  // Not a tombstone.
+  ASSERT_OK(meta.UpdateBoundaries(InternalKey("b", 16, kTypeValue).Encode(),
+                                  "v", 16, kTypeValue, &source));
+  // A tombstone without its own threshold.
+  ASSERT_OK(
+      meta.UpdateBoundaries(InternalKey("c", 25, kTypeSingleDeletion).Encode(),
+                            Slice(), 25, kTypeSingleDeletion, &source));
+  meta.UpdateBoundariesForRange(
+      InternalKey("d", 30, kTypeRangeDeletion),
+      InternalKey("e", kMaxSequenceNumber, kTypeRangeDeletion), 30, icmp,
+      &source);
+  TombstoneDptMap expected;
+  expected.Add(TombstoneDpt{15, 15, 60, 1000});
+  expected.Add(TombstoneDpt{30, 30, 5, 2000});
+  ASSERT_EQ(meta.tombstone_dpts, expected);
 }
 
 TEST_F(VersionEditTest, UpdateBoundariesTracksOldestTombstone) {

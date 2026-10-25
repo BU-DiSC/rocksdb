@@ -657,7 +657,7 @@ Status DBImpl::Recover(
                            f->file_checksum, f->file_checksum_func_name,
                            f->unique_id, f->compensated_range_deletion_size,
                            f->tail_size, f->user_defined_timestamps_persisted);
-              edit.SetOldestTombstoneTimeOfLastFile(f->oldest_tombstone_time);
+              edit.SetTombstoneMetadataOfLastFile(*f);
               ROCKS_LOG_WARN(immutable_db_options_.info_log,
                              "[%s] Moving #%" PRIu64
                              " from from_level-%d to from_level-%d %" PRIu64
@@ -1731,6 +1731,7 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
       Version* version = cfd->current();
       version->Ref();
       uint64_t num_input_entries = 0;
+      const TombstoneDptMap tombstone_dpts = mem->GetTombstoneDpts();
       s = BuildTable(dbname_, versions_.get(), immutable_db_options_, tboptions,
                      file_options_for_compaction_, cfd->table_cache(),
                      iter.get(), std::move(range_del_iters), &meta,
@@ -1742,7 +1743,8 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
                      nullptr /* seqno_to_time_mapping */, &event_logger_,
                      job_id, nullptr /* table_properties */, write_hint,
                      nullptr /*full_history_ts_low*/, &blob_callback_, version,
-                     &num_input_entries);
+                     &num_input_entries, nullptr /* memtable_payload_bytes */,
+                     nullptr /* memtable_garbage_bytes */, &tombstone_dpts);
       version->Unref();
       LogFlush(immutable_db_options_.info_log);
       ROCKS_LOG_DEBUG(immutable_db_options_.info_log,
@@ -1789,7 +1791,7 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
                   meta.file_checksum, meta.file_checksum_func_name,
                   meta.unique_id, meta.compensated_range_deletion_size,
                   meta.tail_size, meta.user_defined_timestamps_persisted);
-    edit->SetOldestTombstoneTimeOfLastFile(meta.oldest_tombstone_time);
+    edit->SetTombstoneMetadataOfLastFile(meta);
 
     for (const auto& blob : blob_file_additions) {
       edit->AddBlobFile(blob);

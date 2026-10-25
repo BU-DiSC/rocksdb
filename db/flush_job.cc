@@ -625,6 +625,10 @@ Status FlushJob::MemPurge() {
           !(new_mem->ShouldFlushNow())) {
         // Construct fragmented memtable range tombstones without mutex
         new_mem->ConstructFragmentedRangeTombstones();
+        // Keep the FADE deadlines of the moved tombstones.
+        for (MemTable* m : mems_) {
+          new_mem->InheritTombstoneMetadata(*m);
+        }
         db_mutex_->Lock();
         uint64_t new_mem_id = mems_[0]->GetID();
 
@@ -980,6 +984,10 @@ Status FlushJob::WriteLevel0Table() {
               : std::min(earliest_snapshot_, preclude_last_level_min_seqno_));
       const SequenceNumber job_snapshot_seq =
           job_context_->GetJobSnapshotSequence();
+      TombstoneDptMap tombstone_dpts;
+      for (MemTable* m : mems_) {
+        tombstone_dpts.Merge(m->GetTombstoneDpts());
+      }
 
       s = BuildTable(
           dbname_, versions_, db_options_, tboptions, file_options_,
@@ -991,7 +999,7 @@ Status FlushJob::WriteLevel0Table() {
           BlobFileCreationReason::kFlush, seqno_to_time_mapping_.get(),
           event_logger_, job_context_->job_id, &table_properties_, write_hint,
           full_history_ts_low, blob_callback_, base_, &num_input_entries,
-          &memtable_payload_bytes, &memtable_garbage_bytes);
+          &memtable_payload_bytes, &memtable_garbage_bytes, &tombstone_dpts);
       TEST_SYNC_POINT_CALLBACK("FlushJob::WriteLevel0Table:s", &s);
       // TODO: Cleanup io_status in BuildTable and table builders
       assert(!s.ok() || io_s.ok());
@@ -1060,7 +1068,7 @@ Status FlushJob::WriteLevel0Table() {
                    meta_.file_checksum, meta_.file_checksum_func_name,
                    meta_.unique_id, meta_.compensated_range_deletion_size,
                    meta_.tail_size, meta_.user_defined_timestamps_persisted);
-    edit_->SetOldestTombstoneTimeOfLastFile(meta_.oldest_tombstone_time);
+    edit_->SetTombstoneMetadataOfLastFile(meta_);
     edit_->SetBlobFileAdditions(std::move(blob_file_additions));
   }
   // Piggyback FlushJobInfo on the first first flushed memtable.

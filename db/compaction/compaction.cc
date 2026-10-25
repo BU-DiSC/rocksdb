@@ -397,6 +397,12 @@ Compaction::Compaction(
   }
 
   PopulatePenultimateLevelOutputRange();
+
+  for (const auto& level_files : inputs_) {
+    for (const FileMetaData* file : level_files.files) {
+      input_tombstone_dpts_.Merge(file->tombstone_dpts);
+    }
+  }
 }
 
 void Compaction::PopulatePenultimateLevelOutputRange() {

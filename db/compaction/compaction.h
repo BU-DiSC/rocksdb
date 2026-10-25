@@ -409,6 +409,10 @@ class Compaction {
   // overlapping [start, end], or 0 if none is known. Null means no boundary.
   uint64_t MinInputFileOldestTombstoneTime(const InternalKey* start,
                                            const InternalKey* end) const;
+  // Union of the input files' per-tombstone delete persistence thresholds.
+  const TombstoneDptMap& input_tombstone_dpts() const {
+    return input_tombstone_dpts_;
+  }
   // Return the minimum epoch number among
   // input files' associated with this compaction
   uint64_t MinInputFileEpochNumber() const;
@@ -575,6 +579,9 @@ class Compaction {
   InternalKey penultimate_level_largest_;
   PenultimateOutputRangeType penultimate_output_range_type_ =
       PenultimateOutputRangeType::kNotSupported;
+
+  // See input_tombstone_dpts().
+  TombstoneDptMap input_tombstone_dpts_;
 };
 
 #ifndef NDEBUG

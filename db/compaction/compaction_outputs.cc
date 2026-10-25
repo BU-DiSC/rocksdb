@@ -53,6 +53,7 @@ Status CompactionOutputs::Finish(
     meta->marked_for_compaction = builder_->NeedCompact();
     meta->user_defined_timestamps_persisted = static_cast<bool>(
         builder_->GetTableProperties().user_defined_timestamps_persisted);
+    meta->tombstone_dpts.Shrink(TombstoneDptMap::kMaxEntriesPerFile);
     meta->oldest_tombstone_time =
         EstimateTombstoneTime(&seqno_to_time_mapping,
                               meta->oldest_tombstone_seqno,
@@ -435,8 +436,9 @@ Status CompactionOutputs::AddToOutput(
     smallest_preferred_seqno_ =
         std::min(smallest_preferred_seqno_, preferred_seqno);
   }
-  s = current_output().meta.UpdateBoundaries(key, value, ikey.sequence,
-                                             ikey.type);
+  s = current_output().meta.UpdateBoundaries(
+      key, value, ikey.sequence, ikey.type,
+      &compaction_->input_tombstone_dpts());
 
   return s;
 }
@@ -719,7 +721,8 @@ Status CompactionOutputs::AddRangeDels(
     builder_->Add(kv.first.Encode(), kv.second);
     assert(icmp.Compare(tombstone_start, tombstone_end) <= 0);
     meta.UpdateBoundariesForRange(tombstone_start, tombstone_end,
-                                  tombstone.seq_, icmp);
+                                  tombstone.seq_, icmp,
+                                  &compaction_->input_tombstone_dpts());
     if (!bottommost_level) {
       bool start_user_key_changed =
           last_tombstone_start_user_key.empty() ||

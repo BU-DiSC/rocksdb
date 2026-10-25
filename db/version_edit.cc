@@ -29,7 +29,8 @@ uint64_t PackFileNumberAndPathId(uint64_t number, uint64_t path_id) {
 
 Status FileMetaData::UpdateBoundaries(const Slice& key, const Slice& value,
                                       SequenceNumber seqno,
-                                      ValueType value_type) {
+                                      ValueType value_type,
+                                      const TombstoneDptMap* source_dpts) {
   if (value_type == kTypeBlobIndex) {
     BlobIndex blob_index;
     const Status s = blob_index.DecodeFrom(value);
@@ -58,9 +59,27 @@ Status FileMetaData::UpdateBoundaries(const Slice& key, const Slice& value,
   if (value_type == kTypeDeletion || value_type == kTypeSingleDeletion ||
       value_type == kTypeDeletionWithTimestamp) {
     oldest_tombstone_seqno = std::min(oldest_tombstone_seqno, seqno);
+    AddTombstoneDpt(seqno, source_dpts);
   }
 
   return Status::OK();
+}
+
+void FileMetaData::AddTombstoneDpt(SequenceNumber seqno,
+                                   const TombstoneDptMap* source_dpts) {
+  if (source_dpts == nullptr) {
+    return;
+  }
+  const TombstoneDpt* entry = source_dpts->Find(seqno);
+  if (entry == nullptr) {
+    return;
+  }
+  tombstone_dpts.Add(seqno, entry->dpt, entry->write_time);
+  // Bound the work of out-of-order inserts while the file is built. The map
+  // is shrunk to TombstoneDptMap::kMaxEntriesPerFile when the file is done.
+  if (tombstone_dpts.Size() > 16 * TombstoneDptMap::kMaxEntriesPerFile) {
+    tombstone_dpts.Shrink(TombstoneDptMap::kMaxEntriesPerFile);
+  }
 }
 
 void VersionEdit::Clear() {
@@ -265,6 +284,12 @@ bool VersionEdit::EncodeTo(std::string* dst,
       PutVarint64(&varint_oldest_tombstone_time, f.oldest_tombstone_time);
       PutLengthPrefixedSlice(dst, Slice(varint_oldest_tombstone_time));
     }
+    if (!f.tombstone_dpts.Empty()) {
+      PutVarint32(dst, NewFileCustomTag::kTombstoneDpts);
+      std::string encoded_tombstone_dpts;
+      f.tombstone_dpts.EncodeTo(&encoded_tombstone_dpts);
+      PutLengthPrefixedSlice(dst, Slice(encoded_tombstone_dpts));
+    }
     TEST_SYNC_POINT_CALLBACK("VersionEdit::EncodeTo:NewFile4:CustomizeFields",
                              dst);
 
@@ -465,6 +490,11 @@ const char* VersionEdit::DecodeNewFile4From(Slice* input) {
         case kOldestTombstoneTime:
           if (!GetVarint64(&field, &f.oldest_tombstone_time)) {
             return "invalid oldest tombstone time";
+          }
+          break;
+        case kTombstoneDpts:
+          if (!f.tombstone_dpts.DecodeFrom(&field).ok() || !field.empty()) {
+            return "invalid tombstone DPTs";
           }
           break;
         default:
@@ -917,6 +947,16 @@ std::string VersionEdit::DebugString(bool hex_key) const {
       r.append(" oldest_tombstone_time:");
       AppendNumberTo(&r, f.oldest_tombstone_time);
     }
+    for (const TombstoneDpt& e : f.tombstone_dpts.entries()) {
+      r.append(" tombstone_dpt:[");
+      AppendNumberTo(&r, e.first_seqno);
+      r.append(",");
+      AppendNumberTo(&r, e.last_seqno);
+      r.append("] dpt ");
+      AppendNumberTo(&r, e.dpt);
+      r.append(" at ");
+      AppendNumberTo(&r, e.write_time);
+    }
     r.append(" epoch_number:");
     AppendNumberTo(&r, f.epoch_number);
     r.append(" file_checksum:");
@@ -1044,6 +1084,20 @@ std::string VersionEdit::DebugJSON(int edit_num, bool hex_key) const {
       jw << "FileCreationTime" << f.file_creation_time;
       if (f.oldest_tombstone_time != 0) {
         jw << "OldestTombstoneTime" << f.oldest_tombstone_time;
+      }
+      if (!f.tombstone_dpts.Empty()) {
+        // JSONWriter does not nest arrays in arrayed objects.
+        std::string dpts;
+        for (const TombstoneDpt& e : f.tombstone_dpts.entries()) {
+          if (!dpts.empty()) {
+            dpts.append(" ");
+          }
+          dpts.append("[" + std::to_string(e.first_seqno) + "," +
+                      std::to_string(e.last_seqno) +
+                      "]:" + std::to_string(e.dpt) + "@" +
+                      std::to_string(e.write_time));
+        }
+        jw << "TombstoneDpts" << dpts;
       }
       jw << "EpochNumber" << f.epoch_number;
       jw << "FileChecksum" << Slice(f.file_checksum).ToString(true);

@@ -532,6 +532,10 @@ class MemTable {
   // The thresholds recorded by RecordTombstoneDpt. Thread safe.
   TombstoneDptMap GetTombstoneDpts() const;
 
+  // Takes the oldest tombstone time and thresholds of `other`, whose entries
+  // are being moved into this memtable (MemPurge). Thread safe.
+  void InheritTombstoneMetadata(const MemTable& other);
+
   // REQUIRES: db_mutex held.
   void SetID(uint64_t id) { id_ = id; }
 

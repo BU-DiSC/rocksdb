@@ -3684,11 +3684,9 @@ void VersionStorageInfo::ComputeExpiredTtlFiles(
   }
 }
 
-std::vector<uint64_t> VersionStorageInfo::FadeDeadlines(
+std::vector<long double> VersionStorageInfo::FadeFractions(
     const MutableCFOptions& mutable_cf_options, int* last_level) const {
-  assert(last_level != nullptr);
-  const uint64_t dth = mutable_cf_options.delete_persistence_threshold;
-  if (dth == 0 || compaction_style_ != CompactionStyle::kCompactionStyleLevel ||
+  if (compaction_style_ != CompactionStyle::kCompactionStyleLevel ||
       base_level_ < 1) {
     return {};
   }
@@ -3702,18 +3700,21 @@ std::vector<uint64_t> VersionStorageInfo::FadeDeadlines(
     }
   }
   const int num_tree_levels = 1 + *last_level - base_level_ + 1;
-  return FadeLevelDeadlines(
-      dth, mutable_cf_options.max_bytes_for_level_multiplier, num_tree_levels);
+  return FadeLevelFractions(mutable_cf_options.max_bytes_for_level_multiplier,
+                            num_tree_levels);
 }
 
 void VersionStorageInfo::ComputeFilesWithExpiredTombstones(
     const ImmutableOptions& ioptions,
     const MutableCFOptions& mutable_cf_options) {
   files_with_expired_tombstones_.clear();
+  next_fade_expiry_time_ = kFadeNoExpiry;
+  fade_expiry_cf_dpt_ = mutable_cf_options.delete_persistence_threshold;
+  fade_expiry_size_ratio_ = mutable_cf_options.max_bytes_for_level_multiplier;
   int last_level = 0;
-  const std::vector<uint64_t> deadlines =
-      FadeDeadlines(mutable_cf_options, &last_level);
-  if (deadlines.empty()) {
+  const std::vector<long double> fractions =
+      FadeFractions(mutable_cf_options, &last_level);
+  if (fractions.empty()) {
     return;
   }
 
@@ -3723,33 +3724,41 @@ void VersionStorageInfo::ComputeFilesWithExpiredTombstones(
     return;
   }
   const uint64_t current_time = static_cast<uint64_t>(temp_current_time);
+  const uint64_t cf_dpt = mutable_cf_options.delete_persistence_threshold;
 
+  // Expiry time of each expired file, for ordering.
+  std::unordered_map<const FileMetaData*, uint64_t> expiry_times;
   // Files in the last tree level have nowhere further down to go.
   for (int level = 0; level < last_level; level++) {
     // Levels between L0 and the base level are normally empty; treat any
     // leftover files there like the base level.
     const int tree_level = level == 0 ? 0 : std::max(1, level - base_level_ + 1);
     for (FileMetaData* f : files_[level]) {
-      if (!f->being_compacted &&
-          IsTombstoneExpired(f->oldest_tombstone_time, current_time,
-                             deadlines[tree_level])) {
+      if (f->being_compacted) {
+        continue;
+      }
+      const uint64_t expiry =
+          FadeExpiryTime(f->oldest_tombstone_time, cf_dpt, f->tombstone_dpts,
+                         fractions[tree_level]);
+      next_fade_expiry_time_ = std::min(next_fade_expiry_time_, expiry);
+      if (current_time > expiry) {
         files_with_expired_tombstones_.emplace_back(level, f);
+        expiry_times[f] = expiry;
       }
     }
   }
 
   std::sort(files_with_expired_tombstones_.begin(),
             files_with_expired_tombstones_.end(),
-            [](const std::pair<int, FileMetaData*>& a,
-               const std::pair<int, FileMetaData*>& b) {
+            [&expiry_times](const std::pair<int, FileMetaData*>& a,
+                            const std::pair<int, FileMetaData*>& b) {
               if (a.first != b.first) {
                 return a.first < b.first;
               }
               if (a.second->num_deletions != b.second->num_deletions) {
                 return a.second->num_deletions > b.second->num_deletions;
               }
-              return a.second->oldest_tombstone_time <
-                     b.second->oldest_tombstone_time;
+              return expiry_times[a.second] < expiry_times[b.second];
             });
 }
 

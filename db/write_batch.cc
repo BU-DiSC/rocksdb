@@ -2519,6 +2519,9 @@ class MemTableInserter : public WriteBatch::Handler {
     } else if (ret_status.ok()) {
       if (delete_dpt_ > 0) {
         mem->RecordTombstoneDpt(sequence_, delete_dpt_, delete_dpt_write_time_);
+        if (db_ != nullptr) {
+          db_->NoteExplicitDeletePersistenceThreshold();
+        }
       }
       MaybeAdvanceSeq();
       CheckMemtableFull();

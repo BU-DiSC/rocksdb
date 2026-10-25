@@ -16,6 +16,7 @@
 #include "options/options_helper.h"
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
+#include "util/defer.h"
 
 namespace ROCKSDB_NAMESPACE {
 // Convenience methods
@@ -199,6 +200,8 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
                          uint64_t* seq_used, size_t batch_cnt,
                          PreReleaseCallback* pre_release_callback,
                          PostMemTableCallback* post_memtable_callback) {
+  // Runs once this write is done and the writer left the write thread.
+  Defer register_fade_trigger([this]() { MaybeRegisterFadeTrigger(); });
   assert(!seq_per_batch_ || batch_cnt != 0);
   assert(my_batch == nullptr || my_batch->Count() == 0 ||
          write_options.protection_bytes_per_key == 0 ||

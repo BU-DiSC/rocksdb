@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -24,6 +25,7 @@
 
 #include "db/dbformat.h"
 #include "db/seqno_to_time_mapping.h"
+#include "db/tombstone_dpt.h"
 #include "rocksdb/rocksdb_namespace.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -85,13 +87,30 @@ inline std::vector<uint64_t> FadeLevelDeadlines(uint64_t dth, double size_ratio,
   return deadlines;
 }
 
-// Whether a file whose oldest tombstone was written at `oldest_tombstone_time`
-// has outlived `deadline` at time `now`. A time of 0 means the file has no
-// tombstones or the time is unknown, which never expires.
-inline bool IsTombstoneExpired(uint64_t oldest_tombstone_time, uint64_t now,
-                               uint64_t deadline) {
-  return oldest_tombstone_time != 0 && now >= oldest_tombstone_time &&
-         now - oldest_tombstone_time > deadline;
+// Never expires.
+constexpr uint64_t kFadeNoExpiry = std::numeric_limits<uint64_t>::max();
+
+// The time after which the tombstones of a file (or memtable) at a tree level
+// with cumulative fraction `fraction` (FadeLevelFractions) have expired: the
+// earliest of the column family's deadline for the oldest tombstone, written
+// at `oldest_tombstone_time` (0 if none or unknown), under threshold `cf_dpt`
+// (0 if off), and the deadlines of the tombstones with their own thresholds.
+// The tombstones have expired once the current time is past the result.
+inline uint64_t FadeExpiryTime(uint64_t oldest_tombstone_time, uint64_t cf_dpt,
+                               const TombstoneDptMap& tombstone_dpts,
+                               long double fraction) {
+  auto deadline = [fraction](uint64_t write_time, uint64_t dpt) {
+    const uint64_t d = FadeDeadline(dpt, fraction);
+    return write_time > kFadeNoExpiry - d ? kFadeNoExpiry : write_time + d;
+  };
+  uint64_t expiry = kFadeNoExpiry;
+  if (cf_dpt > 0 && oldest_tombstone_time != 0) {
+    expiry = deadline(oldest_tombstone_time, cf_dpt);
+  }
+  for (const TombstoneDpt& e : tombstone_dpts.entries()) {
+    expiry = std::min(expiry, deadline(e.write_time, e.dpt));
+  }
+  return expiry;
 }
 
 // Estimates the write time of the tombstone with sequence number `seqno`.

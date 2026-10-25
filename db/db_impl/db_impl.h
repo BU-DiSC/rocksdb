@@ -15,6 +15,7 @@
 #include <limits>
 #include <list>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -1261,6 +1262,25 @@ class DBImpl : public DB {
   // FADE deadline (delete_persistence_threshold). Runs periodically.
   void TriggerCompaction();
 
+  // Notes that a tombstone was written with its own delete persistence
+  // threshold (WriteBatch::PutDeletePersistenceThreshold). Called from the
+  // memtable write path, possibly with the DB mutex held, so it only sets a
+  // flag; MaybeRegisterFadeTrigger acts on it.
+  void NoteExplicitDeletePersistenceThreshold() {
+    if (!explicit_dpt_seen_.load(std::memory_order_relaxed)) {
+      explicit_dpt_seen_.store(true, std::memory_order_relaxed);
+    }
+  }
+
+  // Registers the FADE trigger with a 1 second period once a tombstone with
+  // its own threshold was written. Must not be called with the DB mutex held.
+  void MaybeRegisterFadeTrigger() {
+    if (explicit_dpt_seen_.load(std::memory_order_relaxed) &&
+        !fade_trigger_every_second_.load(std::memory_order_relaxed)) {
+      RegisterFadeTrigger().PermitUncheckedError();
+    }
+  }
+
   // Everytime DB's seqno to time mapping changed (which already hold the db
   // mutex), we install a new SuperVersion in each column family with a shared
   // copy of the new mapping while holding the db mutex.
@@ -2304,6 +2324,11 @@ class DBImpl : public DB {
                                        const WriteOptions& write_options,
                                        bool is_new_db);
 
+  // (Re)registers the FADE trigger (TriggerCompaction) with a period suited
+  // to the column families' thresholds, or every second once a tombstone
+  // with its own threshold exists. Must not be called with the DB mutex held.
+  Status RegisterFadeTrigger();
+
   void PrintStatistics();
 
   size_t EstimateInMemoryStatsHistorySize() const;
@@ -2552,6 +2577,18 @@ class DBImpl : public DB {
 
   // Guards reads and writes to in-memory stats_history_.
   InstrumentedMutex stats_history_mutex_;
+
+  // Serializes RegisterFadeTrigger, which the write path may call without
+  // options_mutex_. Acquired before the DB mutex.
+  std::mutex fade_trigger_mutex_;
+  // Set by CancelPeriodicTaskScheduler; stops the trigger from coming back.
+  // Guarded by fade_trigger_mutex_.
+  bool fade_trigger_disabled_ = false;
+  // Whether a tombstone with its own delete persistence threshold was seen
+  // since open, in a write or in the files' metadata.
+  std::atomic<bool> explicit_dpt_seen_{false};
+  // Whether the FADE trigger runs every second.
+  std::atomic<bool> fade_trigger_every_second_{false};
 
   // In addition to mutex_, log_write_mutex_ protects writes to logs_ and
   // logfile_number_. With two_write_queues it also protects alive_log_files_,

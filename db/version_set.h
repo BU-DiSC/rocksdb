@@ -215,15 +215,17 @@ class VersionStorageInfo {
   void ComputeExpiredTtlFiles(const ImmutableOptions& ioptions,
                               const uint64_t ttl);
 
-  // FADE cumulative deadlines, in seconds, for each tree level: L0 first, then
-  // the base level through the last non-empty level. Empty when FADE is off.
-  // Sets *last_level to the LSM level of the last tree level.
-  std::vector<uint64_t> FadeDeadlines(
+  // FADE cumulative fractions of a threshold (FadeLevelFractions) for each
+  // tree level: L0 first, then the base level through the last non-empty
+  // level. Empty when the compaction style has no FADE. Sets *last_level to
+  // the LSM level of the last tree level.
+  std::vector<long double> FadeFractions(
       const MutableCFOptions& mutable_cf_options, int* last_level) const;
 
-  // This computes files_with_expired_tombstones_ and is called by
-  // ComputeCompactionScore(). A file has expired tombstones when its oldest
-  // tombstone outlived the FADE deadline of its tree level (see db/fade.h).
+  // This computes files_with_expired_tombstones_ and next_fade_expiry_time_
+  // and is called by ComputeCompactionScore(). A file has expired tombstones
+  // once a tombstone outlived its FADE deadline at the file's tree level,
+  // under the column family's threshold or its own (see db/fade.h).
   void ComputeFilesWithExpiredTombstones(
       const ImmutableOptions& ioptions,
       const MutableCFOptions& mutable_cf_options);
@@ -510,11 +512,25 @@ class VersionStorageInfo {
   // REQUIRES: ComputeCompactionScore has been called
   // REQUIRES: DB mutex held during access
   // Used by Leveled Compaction. Sorted by level, then most deletions, then
-  // oldest tombstone.
+  // earliest expiry.
   const autovector<std::pair<int, FileMetaData*>>& FilesWithExpiredTombstones()
       const {
     assert(finalized_);
     return files_with_expired_tombstones_;
+  }
+
+  // Whether FilesWithExpiredTombstones may be stale at `current_time`: a file
+  // not being compacted has expired since the last ComputeCompactionScore
+  // (or still has, and was not picked), or the FADE options changed. Between
+  // version changes, expiry depends only on time and these options.
+  // REQUIRES: DB mutex held during access
+  bool FadeExpiryMayHaveChanged(
+      uint64_t current_time, const MutableCFOptions& mutable_cf_options) const {
+    return current_time > next_fade_expiry_time_ ||
+           mutable_cf_options.delete_persistence_threshold !=
+               fade_expiry_cf_dpt_ ||
+           mutable_cf_options.max_bytes_for_level_multiplier !=
+               fade_expiry_size_ratio_;
   }
 
   void TEST_AddFileMarkedForPeriodicCompaction(int level, FileMetaData* f) {
@@ -738,6 +754,11 @@ class VersionStorageInfo {
       files_marked_for_periodic_compaction_;
 
   autovector<std::pair<int, FileMetaData*>> files_with_expired_tombstones_;
+  // See FadeExpiryMayHaveChanged: the earliest expiry time among files not
+  // being compacted, and the options it was computed with.
+  uint64_t next_fade_expiry_time_ = std::numeric_limits<uint64_t>::max();
+  uint64_t fade_expiry_cf_dpt_ = 0;
+  double fade_expiry_size_ratio_ = 0;
 
   // These files are considered bottommost because none of their keys can exist
   // at lower levels. They are not necessarily all in the same level. The marked

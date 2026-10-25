@@ -858,18 +858,12 @@ Status DBImpl::RegisterRecordSeqnoTimeWorker(const ReadOptions& read_options,
 
   uint64_t min_preserve_seconds = std::numeric_limits<uint64_t>::max();
   uint64_t max_preserve_seconds = std::numeric_limits<uint64_t>::min();
-  uint64_t min_dpt = std::numeric_limits<uint64_t>::max();
   bool mapping_was_empty = false;
   {
     InstrumentedMutexLock l(&mutex_);
 
     for (auto cfd : *versions_->GetColumnFamilySet()) {
       uint64_t preserve_seconds = SeqnoTimePreserveSeconds(cfd);
-      uint64_t dpt =
-          cfd->GetLatestMutableCFOptions()->delete_persistence_threshold;
-      if (!cfd->IsDropped() && dpt > 0) {
-        min_dpt = std::min(dpt, min_dpt);
-      }
       if (!cfd->IsDropped() && preserve_seconds > 0) {
         min_preserve_seconds = std::min(preserve_seconds, min_preserve_seconds);
         max_preserve_seconds = std::max(preserve_seconds, max_preserve_seconds);
@@ -969,26 +963,75 @@ Status DBImpl::RegisterRecordSeqnoTimeWorker(const ReadOptions& read_options,
         seqno_time_cadence);
   }
 
-  // FADE: tombstones expire with time, not writes, so recheck periodically.
-  // The mapping dates writes to within one recording cadence, so checking
-  // more often gains nothing. Cap the period so large thresholds still
-  // react within a minute.
   if (s.ok()) {
-    if (min_dpt == std::numeric_limits<uint64_t>::max()) {
-      s = periodic_task_scheduler_.Unregister(
-          PeriodicTaskType::kTriggerCompaction);
-    } else {
-      constexpr uint64_t kMaxTriggerPeriodSeconds = 60;
-      const uint64_t period =
-          std::clamp<uint64_t>(min_dpt / kMaxSeqnoTimePairsPerCF, 1,
-                               kMaxTriggerPeriodSeconds);
-      s = periodic_task_scheduler_.Register(
-          PeriodicTaskType::kTriggerCompaction,
-          periodic_task_functions_.at(PeriodicTaskType::kTriggerCompaction),
-          period);
-    }
+    s = RegisterFadeTrigger();
   }
 
+  return s;
+}
+
+Status DBImpl::RegisterFadeTrigger() {
+  std::lock_guard<std::mutex> lock(fade_trigger_mutex_);
+  if (fade_trigger_disabled_) {
+    return Status::OK();
+  }
+  uint64_t min_dpt = std::numeric_limits<uint64_t>::max();
+  bool explicit_dpt = explicit_dpt_seen_.load(std::memory_order_relaxed);
+  {
+    InstrumentedMutexLock l(&mutex_);
+    for (auto cfd : *versions_->GetColumnFamilySet()) {
+      if (cfd->IsDropped()) {
+        continue;
+      }
+      const uint64_t dpt =
+          cfd->GetLatestMutableCFOptions()->delete_persistence_threshold;
+      if (dpt > 0) {
+        min_dpt = std::min(dpt, min_dpt);
+      }
+      // Files written before this open may hold tombstones with their own
+      // thresholds.
+      const VersionStorageInfo* vstorage = cfd->current()->storage_info();
+      for (int level = 0; !explicit_dpt && level < vstorage->num_levels();
+           level++) {
+        for (const FileMetaData* f : vstorage->LevelFiles(level)) {
+          if (!f->tombstone_dpts.Empty()) {
+            explicit_dpt = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (explicit_dpt) {
+    explicit_dpt_seen_.store(true, std::memory_order_relaxed);
+  }
+
+  // FADE: tombstones expire with time, not writes, so recheck periodically.
+  // For a column family threshold, the mapping dates writes to within one
+  // recording cadence, so checking more often gains nothing; the period is
+  // capped so that large thresholds still react within a minute. Tombstones
+  // with their own thresholds carry exact write times and may have short
+  // thresholds, so check every second.
+  Status s;
+  uint64_t period = 0;
+  if (explicit_dpt) {
+    period = 1;
+  } else if (min_dpt != std::numeric_limits<uint64_t>::max()) {
+    constexpr uint64_t kMaxTriggerPeriodSeconds = 60;
+    period = std::clamp<uint64_t>(min_dpt / kMaxSeqnoTimePairsPerCF, 1,
+                                  kMaxTriggerPeriodSeconds);
+  }
+  if (period == 0) {
+    s = periodic_task_scheduler_.Unregister(
+        PeriodicTaskType::kTriggerCompaction);
+  } else {
+    s = periodic_task_scheduler_.Register(
+        PeriodicTaskType::kTriggerCompaction,
+        periodic_task_functions_.at(PeriodicTaskType::kTriggerCompaction),
+        period);
+  }
+  fade_trigger_every_second_.store(s.ok() && explicit_dpt,
+                                   std::memory_order_relaxed);
   return s;
 }
 
@@ -1016,20 +1059,27 @@ void DBImpl::TriggerCompaction() {
       }
       const MutableCFOptions* mutable_cf_options =
           cfd->GetLatestMutableCFOptions();
-      if (mutable_cf_options->delete_persistence_threshold == 0) {
+      const uint64_t cf_dpt = mutable_cf_options->delete_persistence_threshold;
+      if (cf_dpt == 0 && !explicit_dpt_seen_.load(std::memory_order_relaxed)) {
         continue;
       }
       VersionStorageInfo* vstorage = cfd->current()->storage_info();
       int last_level = 0;
-      const std::vector<uint64_t> deadlines =
-          vstorage->FadeDeadlines(*mutable_cf_options, &last_level);
-      if (!deadlines.empty() &&
-          IsTombstoneExpired(cfd->mem()->ApproximateOldestTombstoneTime(),
-                             current_time, deadlines[0])) {
+      const std::vector<long double> fractions =
+          vstorage->FadeFractions(*mutable_cf_options, &last_level);
+      if (fractions.empty()) {
+        continue;
+      }
+      MemTable* mem = cfd->mem();
+      if (current_time > FadeExpiryTime(mem->ApproximateOldestTombstoneTime(),
+                                        cf_dpt, mem->GetTombstoneDpts(),
+                                        fractions[0])) {
         cfd->Ref();
         cfds_to_flush.push_back(cfd);
       }
-      if (mutable_cf_options->disable_auto_compactions) {
+      if (mutable_cf_options->disable_auto_compactions ||
+          !vstorage->FadeExpiryMayHaveChanged(current_time,
+                                              *mutable_cf_options)) {
         continue;
       }
       // Recompute so that newly expired tombstones are seen.
@@ -1071,6 +1121,11 @@ void DBImpl::TriggerCompaction() {
 }
 
 Status DBImpl::CancelPeriodicTaskScheduler() {
+  {
+    // Keep writes from registering the FADE trigger again.
+    std::lock_guard<std::mutex> lock(fade_trigger_mutex_);
+    fade_trigger_disabled_ = true;
+  }
   Status s = Status::OK();
   for (uint8_t task_type = 0;
        task_type < static_cast<uint8_t>(PeriodicTaskType::kMax); task_type++) {

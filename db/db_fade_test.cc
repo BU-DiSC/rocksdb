@@ -55,13 +55,28 @@ TEST(FadeLevelDeadlinesTest, HugeValuesDoNotOverflow) {
   ASSERT_LE(d.front(), d.back());
 }
 
-TEST(FadeExpiryTest, Boundary) {
-  // Unknown or absent tombstone time never expires.
-  ASSERT_FALSE(IsTombstoneExpired(0, 1000, 10));
-  // Clock behind the tombstone time never expires.
-  ASSERT_FALSE(IsTombstoneExpired(1000, 900, 10));
-  ASSERT_FALSE(IsTombstoneExpired(1000, 1010, 10));
-  ASSERT_TRUE(IsTombstoneExpired(1000, 1011, 10));
+TEST(FadeExpiryTest, ColumnFamilyThreshold) {
+  const TombstoneDptMap none;
+  // Unknown or absent tombstone time, or FADE off, never expires.
+  ASSERT_EQ(FadeExpiryTime(0, 100, none, 0.5L), kFadeNoExpiry);
+  ASSERT_EQ(FadeExpiryTime(1000, 0, none, 0.5L), kFadeNoExpiry);
+  ASSERT_EQ(FadeExpiryTime(1000, 100, none, 0.5L), 1050u);
+  ASSERT_EQ(FadeExpiryTime(1000, 100, none, 1.0L), 1100u);
+}
+
+TEST(FadeExpiryTest, EarliestOfAllThresholds) {
+  TombstoneDptMap dpts;
+  dpts.Add(TombstoneDpt{1, 1, 40, 1020});  // 1040 at 0.5
+  dpts.Add(TombstoneDpt{5, 5, 10, 1050});  // 1055 at 0.5
+  // The column family deadline (1050 at 0.5) is later than one entry's.
+  ASSERT_EQ(FadeExpiryTime(1000, 100, dpts, 0.5L), 1040u);
+  // Entries alone, with FADE off for the column family.
+  ASSERT_EQ(FadeExpiryTime(0, 0, dpts, 0.5L), 1040u);
+  ASSERT_EQ(FadeExpiryTime(0, 0, dpts, 1.0L), 1060u);
+  // Saturates instead of wrapping.
+  TombstoneDptMap huge;
+  huge.Add(TombstoneDpt{1, 1, kFadeNoExpiry, 1000});
+  ASSERT_EQ(FadeExpiryTime(0, 0, huge, 1.0L), kFadeNoExpiry);
 }
 
 TEST(FadeLevelFractionsTest, MatchesDeadlines) {
@@ -716,6 +731,138 @@ TEST_F(DBFadeTest, CompactionCarriesTombstoneDpts) {
   expected.Add(TombstoneDpt{first + 1, first + 1, 100, 5000});
   expected.Add(TombstoneDpt{first + 2, first + 3, 30, 6000});
   ASSERT_EQ(Files()[1][0].tombstone_dpts, expected);
+}
+
+// FADE options for a column family without its own threshold, with bottom
+// data in L3 under keys "a", "b" and "z".
+class DBFadePerDeleteTest : public DBFadeTest {
+ protected:
+  Options PerDeleteOptions() {
+    Options options = FadeOptions();
+    options.delete_persistence_threshold = 0;
+    options.disable_auto_compactions = false;
+    options.level0_file_num_compaction_trigger = 10;
+    options.max_bytes_for_level_multiplier = 2;
+    listener_ = std::make_shared<CompactionReasonListener>();
+    options.listeners.push_back(listener_);
+    return options;
+  }
+
+  void WriteBottomData() {
+    ASSERT_OK(Put("a", "v"));
+    ASSERT_OK(Put("b", "v"));
+    ASSERT_OK(Put("z", "v"));
+    ASSERT_OK(Flush());
+    MoveFilesToLevel(3);
+  }
+
+  void DeleteWithDpt(const std::string& key, uint64_t dpt) {
+    WriteBatch batch;
+    ASSERT_OK(batch.PutDeletePersistenceThreshold(dpt, Now()));
+    ASSERT_OK(batch.Delete(key));
+    ASSERT_OK(db_->Write(WriteOptions(), &batch));
+  }
+
+  // Lets the 1 second trigger run while advancing time by `seconds`.
+  void SleepSeconds(uint64_t seconds) {
+    for (uint64_t i = 0; i < seconds; i += kStep) {
+      dbfull()->TEST_WaitForPeriodicTaskRun(
+          [&] { mock_clock_->MockSleepForSeconds(kStep); });
+    }
+  }
+
+  static constexpr int kStep = 5;
+  std::shared_ptr<CompactionReasonListener> listener_;
+};
+
+TEST_F(DBFadePerDeleteTest, TombstoneReachesLastLevel) {
+  DestroyAndReopen(PerDeleteOptions());
+  WriteBottomData();
+
+  // Stays in the memtable: only the trigger can move it.
+  DeleteWithDpt("b", 200);
+  SleepSeconds(200 + 4 * kStep);
+  ASSERT_OK(dbfull()->TEST_WaitForFlushMemTable());
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+
+  ASSERT_EQ(listener_->Count(FlushReason::kDeletePersistence), 1);
+  ASSERT_GE(listener_->Count(CompactionReason::kDeletePersistence), 1);
+  ASSERT_EQ("0,0,0,1", FilesPerLevel());
+  ASSERT_EQ(Files()[3][0].num_deletions, 0u);
+  ASSERT_EQ("NOT_FOUND", Get("b"));
+}
+
+TEST_F(DBFadePerDeleteTest, TombstoneWithoutThresholdStays) {
+  DestroyAndReopen(PerDeleteOptions());
+  WriteBottomData();
+
+  DeleteWithDpt("a", 0);
+  ASSERT_OK(Delete("b"));
+  ASSERT_OK(Flush());
+  SleepSeconds(1000);
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+
+  ASSERT_EQ(listener_->Count(CompactionReason::kDeletePersistence), 0);
+  ASSERT_EQ("1,0,0,1", FilesPerLevel());
+}
+
+// The effective threshold is the smaller of the column family's and the
+// tombstone's own.
+TEST_F(DBFadePerDeleteTest, SmallerThresholdWins) {
+  Options options = PerDeleteOptions();
+  options.delete_persistence_threshold = kDth;
+  DestroyAndReopen(options);
+  WriteBottomData();
+
+  DeleteWithDpt("b", 200);
+  ASSERT_OK(Flush());
+  SleepSeconds(200 + 4 * kStep);
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+  ASSERT_EQ("0,0,0,1", FilesPerLevel());
+  ASSERT_EQ(Files()[3][0].num_deletions, 0u);
+
+  // A larger threshold of its own does not delay the column family's.
+  DeleteWithDpt("a", 100 * kDth);
+  ASSERT_OK(Flush());
+  SleepSeconds(kDth + 4 * kStep);
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+  ASSERT_EQ("0,0,0,1", FilesPerLevel());
+  ASSERT_EQ(Files()[3][0].num_deletions, 0u);
+}
+
+// After a reopen, thresholds in the files' metadata keep the trigger running
+// without new writes.
+TEST_F(DBFadePerDeleteTest, TriggerRunsAfterReopen) {
+  Options options = PerDeleteOptions();
+  DestroyAndReopen(options);
+  WriteBottomData();
+  DeleteWithDpt("b", 200);
+  ASSERT_OK(Flush());
+  Reopen(options);
+
+  SleepSeconds(200 + 4 * kStep);
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+  ASSERT_EQ("0,0,0,1", FilesPerLevel());
+  ASSERT_EQ(Files()[3][0].num_deletions, 0u);
+}
+
+// A range deletion with its own threshold is moved down like a point one.
+TEST_F(DBFadePerDeleteTest, RangeTombstoneReachesLastLevel) {
+  DestroyAndReopen(PerDeleteOptions());
+  WriteBottomData();
+
+  WriteBatch batch;
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(200, Now()));
+  ASSERT_OK(batch.DeleteRange("a", "c"));
+  ASSERT_OK(db_->Write(WriteOptions(), &batch));
+  ASSERT_OK(Flush());
+  SleepSeconds(200 + 4 * kStep);
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+
+  ASSERT_EQ("0,0,0,1", FilesPerLevel());
+  ASSERT_EQ(Files()[3][0].num_range_deletions, 0u);
+  ASSERT_EQ("NOT_FOUND", Get("a"));
+  ASSERT_EQ("v", Get("z"));
 }
 
 }  // namespace ROCKSDB_NAMESPACE

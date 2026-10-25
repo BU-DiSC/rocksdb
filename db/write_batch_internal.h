@@ -146,6 +146,12 @@ class WriteBatchInternal {
 
   // Store the specified number as the sequence number for the start of
   // this batch.
+  // Parses a blob written by WriteBatch::PutDeletePersistenceThreshold.
+  // Returns false for any other blob.
+  static bool ParseDeletePersistenceThreshold(const Slice& blob,
+                                              uint64_t* seconds,
+                                              uint64_t* write_time);
+
   static void SetSequence(WriteBatch* batch, SequenceNumber seq);
 
   // Returns the offset of the first entry in the batch.

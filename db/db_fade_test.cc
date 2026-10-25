@@ -8,10 +8,13 @@
 
 #include "db/db_test_util.h"
 #include "db/tombstone_dpt.h"
+#include "db/write_batch_internal.h"
 #include "env/composite_env_wrapper.h"
 #include "port/stack_trace.h"
+#include "rocksdb/utilities/transaction_db.h"
 #include "test_util/mock_time_env.h"
 #include "test_util/testharness.h"
+#include "utilities/transactions/pessimistic_transaction_db.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -185,6 +188,34 @@ TEST(TombstoneDptMapTest, EncodeDecode) {
 }
 
 // Counts compactions and flushes by reason.
+TEST(DeletePersistenceMarkerTest, RoundTrip) {
+  const std::string blob =
+      WriteBatch::DeletePersistenceThresholdLogData(3600, 1234567);
+  uint64_t dpt = 0;
+  uint64_t write_time = 0;
+  ASSERT_TRUE(WriteBatchInternal::ParseDeletePersistenceThreshold(
+      blob, &dpt, &write_time));
+  ASSERT_EQ(dpt, 3600u);
+  ASSERT_EQ(write_time, 1234567u);
+}
+
+TEST(DeletePersistenceMarkerTest, RejectsOtherBlobs) {
+  uint64_t dpt = 0;
+  uint64_t write_time = 0;
+  ASSERT_FALSE(WriteBatchInternal::ParseDeletePersistenceThreshold(
+      "", &dpt, &write_time));
+  ASSERT_FALSE(WriteBatchInternal::ParseDeletePersistenceThreshold(
+      "replication timestamp", &dpt, &write_time));
+  std::string blob = WriteBatch::DeletePersistenceThresholdLogData(3600, 7);
+  // Truncated.
+  ASSERT_FALSE(WriteBatchInternal::ParseDeletePersistenceThreshold(
+      Slice(blob.data(), blob.size() - 1), &dpt, &write_time));
+  // Trailing bytes.
+  blob.push_back('x');
+  ASSERT_FALSE(WriteBatchInternal::ParseDeletePersistenceThreshold(
+      blob, &dpt, &write_time));
+}
+
 class CompactionReasonListener : public EventListener {
  public:
   void OnCompactionCompleted(DB* /*db*/, const CompactionJobInfo& ci) override {
@@ -277,6 +308,12 @@ class DBFadeTest : public DBTestBase {
         mock_clock_->MockSleepForSeconds(static_cast<int>(kCadence));
       });
     }
+  }
+
+  // Thresholds recorded in the default column family's active memtable.
+  static std::vector<TombstoneDpt> MemtableDpts(DB* db) {
+    auto* cfh = static_cast<ColumnFamilyHandleImpl*>(db->DefaultColumnFamily());
+    return cfh->cfd()->mem()->GetTombstoneDpts().entries();
   }
 
   std::vector<std::vector<FileMetaData>> Files() {
@@ -481,6 +518,118 @@ TEST_F(DBFadeTest, ZeroThresholdNeverPicks) {
   ASSERT_EQ(listener->Count(CompactionReason::kDeletePersistence), 0);
   ASSERT_EQ("2,0,0,1", FilesPerLevel());
 }
+
+TEST_F(DBFadeTest, MarkerSetsDptOfFollowingDeletes) {
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  DestroyAndReopen(options);
+  const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
+
+  WriteBatch batch;
+  ASSERT_OK(batch.Delete("a"));  // first: before any marker
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, 5000));
+  ASSERT_OK(batch.Delete("b"));                 // first + 1
+  ASSERT_OK(batch.SingleDelete("c"));           // first + 2
+  ASSERT_OK(batch.Put("d", "v"));               // first + 3
+  ASSERT_OK(batch.DeleteRange("e", "f"));       // first + 4
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(0, 5000));
+  ASSERT_OK(batch.Delete("g"));                 // first + 5
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(50, 6000));
+  ASSERT_OK(batch.Delete("h"));                 // first + 6
+  ASSERT_OK(db_->Write(WriteOptions(), &batch));
+
+  std::vector<TombstoneDpt> expected = {{first + 1, first + 2, 100, 5000},
+                                        {first + 4, first + 4, 100, 5000},
+                                        {first + 6, first + 6, 50, 6000}};
+  ASSERT_EQ(MemtableDpts(db_), expected);
+}
+
+TEST_F(DBFadeTest, MarkerDoesNotCarryIntoNextBatch) {
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  DestroyAndReopen(options);
+  const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
+
+  WriteBatch with_marker;
+  ASSERT_OK(with_marker.PutDeletePersistenceThreshold(100, 5000));
+  ASSERT_OK(with_marker.Delete("a"));
+  ASSERT_OK(db_->Write(WriteOptions(), &with_marker));
+  ASSERT_OK(Delete("b"));
+
+  std::vector<TombstoneDpt> expected = {{first, first, 100, 5000}};
+  ASSERT_EQ(MemtableDpts(db_), expected);
+}
+
+TEST_F(DBFadeTest, MarkerSurvivesWalReplay) {
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  // Keep the replayed tombstone in the memtable.
+  options.avoid_flush_during_recovery = true;
+  DestroyAndReopen(options);
+  const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
+
+  WriteBatch batch;
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, Now()));
+  ASSERT_OK(batch.Delete("a"));
+  ASSERT_OK(db_->Write(WriteOptions(), &batch));
+  const uint64_t write_time = Now();
+  Sleep(5 * kCadence);
+  Reopen(options);
+
+  std::vector<TombstoneDpt> expected = {{first, first, 100, write_time}};
+  ASSERT_EQ(MemtableDpts(db_), expected);
+}
+
+class DBFadeTwoPhaseTest
+    : public DBFadeTest,
+      public testing::WithParamInterface<TxnDBWritePolicy> {};
+
+// A prepared transaction rebuilt during recovery keeps its marker. Only
+// WRITE_COMMITTED writes the memtable after recovery: replayed writes are
+// flushed during recovery, since 2PC forces avoid_flush_during_recovery off.
+TEST_P(DBFadeTwoPhaseTest, MarkerSurvivesRecovery) {
+  const TxnDBWritePolicy policy = GetParam();
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  DestroyAndReopen(options);
+  Close();
+  TransactionDBOptions txn_db_options;
+  txn_db_options.write_policy = policy;
+  TransactionDB* txn_db = nullptr;
+  ASSERT_OK(TransactionDB::Open(options, txn_db_options, dbname_, &txn_db));
+  std::unique_ptr<TransactionDB> txn_db_guard(txn_db);
+
+  WriteOptions write_options;
+  write_options.sync = true;
+  Transaction* txn = txn_db->BeginTransaction(write_options);
+  ASSERT_OK(txn->SetName("t"));
+  ASSERT_OK(txn->Put("a", "v"));
+  txn->PutLogData(WriteBatch::DeletePersistenceThresholdLogData(100, 5000));
+  ASSERT_OK(txn->Delete("b"));
+  ASSERT_OK(txn->Prepare());
+  delete txn;
+  static_cast<PessimisticTransactionDB*>(txn_db)->TEST_Crash();
+  txn_db_guard.reset();
+
+  ASSERT_OK(TransactionDB::Open(options, txn_db_options, dbname_, &txn_db));
+  txn_db_guard.reset(txn_db);
+  txn = txn_db->GetTransactionByName("t");
+  ASSERT_NE(txn, nullptr);
+  ASSERT_OK(txn->Commit());
+  delete txn;
+  auto entries = MemtableDpts(txn_db);
+  ASSERT_EQ(entries.size(), 1u);
+  ASSERT_EQ(entries[0].first_seqno, entries[0].last_seqno);
+  ASSERT_EQ(entries[0].dpt, 100u);
+  ASSERT_EQ(entries[0].write_time, 5000u);
+  std::string value;
+  ASSERT_TRUE(txn_db->Get(ReadOptions(), "b", &value).IsNotFound());
+  ASSERT_OK(txn_db->Get(ReadOptions(), "a", &value));
+}
+
+INSTANTIATE_TEST_CASE_P(
+    DBFadeTwoPhaseTest, DBFadeTwoPhaseTest,
+    testing::Values(WRITE_COMMITTED));
 
 }  // namespace ROCKSDB_NAMESPACE
 

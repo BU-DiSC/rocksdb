@@ -865,6 +865,10 @@ Status TransactionBaseImpl::RebuildFromWriteBatch(WriteBatch* src_batch) {
       return txn_->Merge(db_->GetColumnFamilyHandle(cf), user_key, val);
     }
 
+    // Keeps delete persistence thresholds
+    // (WriteBatch::PutDeletePersistenceThreshold) with their deletions.
+    void LogData(const Slice& blob) override { txn_->PutLogData(blob); }
+
     // this is used for reconstructing prepared transactions upon
     // recovery. there should not be any meta markers in the batches
     // we are processing.

@@ -207,6 +207,25 @@ class WriteBatch : public WriteBatchBase {
   // replication.
   Status PutLogData(const Slice& blob) override;
 
+  // Sets the delete persistence threshold of the point and range deletions
+  // that follow in this batch, until the next call or the end of the batch.
+  // Tombstones written by those deletions must be removed from the DB within
+  // `seconds` of `write_time` (seconds since the epoch, on the clock of the
+  // DB's Env). The effective threshold of a tombstone is the minimum of this
+  // value and the column family's delete_persistence_threshold. Zero clears
+  // the threshold for the deletions that follow.
+  //
+  // The threshold is stored as LogData, so it does not consume a sequence
+  // number and survives WAL replay with its original write time.
+  Status PutDeletePersistenceThreshold(uint64_t seconds, uint64_t write_time);
+  // As above, with the write time read from SystemClock::Default().
+  Status PutDeletePersistenceThreshold(uint64_t seconds);
+
+  // The LogData blob written by PutDeletePersistenceThreshold, for callers
+  // such as Transaction::PutLogData that do not expose the WriteBatch.
+  static std::string DeletePersistenceThresholdLogData(uint64_t seconds,
+                                                       uint64_t write_time);
+
   using WriteBatchBase::Clear;
   // Clear all updates buffered in this batch.
   void Clear() override;

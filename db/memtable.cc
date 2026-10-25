@@ -290,6 +290,20 @@ void MemTable::UpdateOldestTombstoneTime() {
   }
 }
 
+void MemTable::RecordTombstoneDpt(SequenceNumber seqno, uint64_t dpt,
+                                  uint64_t write_time) {
+  std::lock_guard<std::mutex> lock(tombstone_dpts_mutex_);
+  tombstone_dpts_.Add(seqno, dpt, write_time);
+  if (tombstone_dpts_.Size() > kMaxTombstoneDpts) {
+    tombstone_dpts_.Shrink(kMaxTombstoneDpts / 2);
+  }
+}
+
+TombstoneDptMap MemTable::GetTombstoneDpts() const {
+  std::lock_guard<std::mutex> lock(tombstone_dpts_mutex_);
+  return tombstone_dpts_;
+}
+
 Status MemTable::VerifyEntryChecksum(const char* entry,
                                      uint32_t protection_bytes_per_key,
                                      bool allow_data_in_errors) {

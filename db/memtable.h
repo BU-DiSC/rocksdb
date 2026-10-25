@@ -12,6 +12,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -21,6 +22,7 @@
 #include "db/range_tombstone_fragmenter.h"
 #include "db/read_callback.h"
 #include "db/seqno_to_time_mapping.h"
+#include "db/tombstone_dpt.h"
 #include "db/version_edit.h"
 #include "memory/allocator.h"
 #include "memory/concurrent_arena.h"
@@ -522,6 +524,14 @@ class MemTable {
     return oldest_tombstone_time_.load(std::memory_order_relaxed);
   }
 
+  // Records the delete persistence threshold of the tombstone with sequence
+  // number `seqno`. Thread safe.
+  void RecordTombstoneDpt(SequenceNumber seqno, uint64_t dpt,
+                          uint64_t write_time);
+
+  // The thresholds recorded by RecordTombstoneDpt. Thread safe.
+  TombstoneDptMap GetTombstoneDpts() const;
+
   // REQUIRES: db_mutex held.
   void SetID(uint64_t id) { id_ = id; }
 
@@ -651,6 +661,12 @@ class MemTable {
   // Timestamp of oldest tombstone, 0 if none. Used by FADE to flush a
   // memtable before its tombstones outlive their deadline.
   std::atomic<uint64_t> oldest_tombstone_time_;
+
+  // Entries kept in tombstone_dpts_ before neighbours are merged. Merging only
+  // makes deadlines earlier.
+  static constexpr size_t kMaxTombstoneDpts = 1024;
+  mutable std::mutex tombstone_dpts_mutex_;
+  TombstoneDptMap tombstone_dpts_;
 
   // Memtable id to track flush.
   uint64_t id_ = 0;

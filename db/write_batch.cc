@@ -1781,6 +1781,48 @@ Status WriteBatch::PutLogData(const Slice& blob) {
   return save.commit();
 }
 
+namespace {
+// Prefix of the LogData blob that sets the delete persistence threshold of
+// the deletions that follow it.
+constexpr char kDeletePersistenceMarker[] = "rocksdb.dpt:";
+constexpr size_t kDeletePersistenceMarkerLen =
+    sizeof(kDeletePersistenceMarker) - 1;
+}  // namespace
+
+std::string WriteBatch::DeletePersistenceThresholdLogData(
+    uint64_t seconds, uint64_t write_time) {
+  std::string blob(kDeletePersistenceMarker, kDeletePersistenceMarkerLen);
+  PutVarint64(&blob, seconds);
+  PutVarint64(&blob, write_time);
+  return blob;
+}
+
+Status WriteBatch::PutDeletePersistenceThreshold(uint64_t seconds,
+                                                 uint64_t write_time) {
+  return PutLogData(DeletePersistenceThresholdLogData(seconds, write_time));
+}
+
+Status WriteBatch::PutDeletePersistenceThreshold(uint64_t seconds) {
+  int64_t now = 0;
+  Status s = SystemClock::Default()->GetCurrentTime(&now);
+  if (!s.ok()) {
+    return s;
+  }
+  return PutDeletePersistenceThreshold(seconds, static_cast<uint64_t>(now));
+}
+
+bool WriteBatchInternal::ParseDeletePersistenceThreshold(
+    const Slice& blob, uint64_t* seconds, uint64_t* write_time) {
+  Slice input = blob;
+  if (!input.starts_with(
+          Slice(kDeletePersistenceMarker, kDeletePersistenceMarkerLen))) {
+    return false;
+  }
+  input.remove_prefix(kDeletePersistenceMarkerLen);
+  return GetVarint64(&input, seconds) && GetVarint64(&input, write_time) &&
+         input.empty();
+}
+
 void WriteBatch::SetSavePoint() {
   if (save_points_ == nullptr) {
     save_points_.reset(new SavePoints());
@@ -1981,6 +2023,10 @@ class MemTableInserter : public WriteBatch::Handler {
 
   bool hint_per_batch_;
   bool hint_created_;
+  // Delete persistence threshold set by the last marker in the current batch
+  // (WriteBatch::PutDeletePersistenceThreshold), and its write time.
+  uint64_t delete_dpt_ = 0;
+  uint64_t delete_dpt_write_time_ = 0;
   // Hints for this batch
   using HintMap = std::unordered_map<MemTable*, void*>;
   using HintMapType = aligned_storage<HintMap>::type;
@@ -2128,6 +2174,13 @@ class MemTableInserter : public WriteBatch::Handler {
   void set_prot_info(const WriteBatch::ProtectionInfo* prot_info) {
     prot_info_ = prot_info;
     prot_info_idx_ = 0;
+  }
+
+  // A delete persistence threshold applies until the end of its batch. Call
+  // before iterating each batch when one inserter iterates several.
+  void ResetDeletePersistenceThreshold() {
+    delete_dpt_ = 0;
+    delete_dpt_write_time_ = 0;
   }
 
   SequenceNumber sequence() const { return sequence_; }
@@ -2434,6 +2487,22 @@ class MemTableInserter : public WriteBatch::Handler {
     return s;
   }
 
+  void LogData(const Slice& blob) override {
+    uint64_t dpt = 0;
+    uint64_t write_time = 0;
+    if (!WriteBatchInternal::ParseDeletePersistenceThreshold(blob, &dpt,
+                                                             &write_time)) {
+      return;
+    }
+    delete_dpt_ = dpt;
+    delete_dpt_write_time_ = write_time;
+    if (UNLIKELY(rebuilding_trx_ != nullptr)) {
+      // Keep the threshold for the deletions of the recovered transaction.
+      // Only the markers are kept; other LogData does not reach the memtable.
+      rebuilding_trx_->PutLogData(blob).PermitUncheckedError();
+    }
+  }
+
   Status DeleteImpl(uint32_t /*column_family_id*/, const Slice& key,
                     const Slice& value, ValueType delete_type,
                     const ProtectionInfoKVOS64* kv_prot_info) {
@@ -2448,6 +2517,9 @@ class MemTableInserter : public WriteBatch::Handler {
       const bool kBatchBoundary = true;
       MaybeAdvanceSeq(kBatchBoundary);
     } else if (ret_status.ok()) {
+      if (delete_dpt_ > 0) {
+        mem->RecordTombstoneDpt(sequence_, delete_dpt_, delete_dpt_write_time_);
+      }
       MaybeAdvanceSeq();
       CheckMemtableFull();
     }
@@ -3027,7 +3099,13 @@ class MemTableInserter : public WriteBatch::Handler {
           // all inserts must reference this trx log number
           log_number_ref_ = batch_info.log_number_;
           ResetProtectionInfo();
+          // The recovered batch carries its own markers.
+          const uint64_t saved_dpt = delete_dpt_;
+          const uint64_t saved_dpt_write_time = delete_dpt_write_time_;
+          ResetDeletePersistenceThreshold();
           s = batch_info.batch_->Iterate(this);
+          delete_dpt_ = saved_dpt;
+          delete_dpt_write_time_ = saved_dpt_write_time;
           log_number_ref_ = 0;
         }
         // else the values are already inserted before the commit
@@ -3189,6 +3267,7 @@ Status WriteBatchInternal::InsertInto(
     SetSequence(w->batch, inserter.sequence());
     inserter.set_log_number_ref(w->log_ref);
     inserter.set_prot_info(w->batch->prot_info_.get());
+    inserter.ResetDeletePersistenceThreshold();
     w->status = w->batch->Iterate(&inserter);
     if (!w->status.ok()) {
       return w->status;

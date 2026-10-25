@@ -7,6 +7,7 @@
 #include "db/fade.h"
 
 #include "db/db_test_util.h"
+#include "db/tombstone_dpt.h"
 #include "env/composite_env_wrapper.h"
 #include "port/stack_trace.h"
 #include "test_util/mock_time_env.h"
@@ -58,6 +59,129 @@ TEST(FadeExpiryTest, Boundary) {
   ASSERT_FALSE(IsTombstoneExpired(1000, 900, 10));
   ASSERT_FALSE(IsTombstoneExpired(1000, 1010, 10));
   ASSERT_TRUE(IsTombstoneExpired(1000, 1011, 10));
+}
+
+TEST(FadeLevelFractionsTest, MatchesDeadlines) {
+  std::vector<long double> f = FadeLevelFractions(10.0, 3);
+  ASSERT_EQ(f.size(), 3U);
+  ASSERT_EQ(f.back(), 1.0L);
+  ASSERT_EQ(FadeDeadline(1110, f[0]), 10U);
+  ASSERT_EQ(FadeDeadline(1110, f[1]), 110U);
+  ASSERT_EQ(FadeDeadline(1110, f[2]), 1110U);
+}
+
+TEST(TombstoneDptMapTest, AddExtendsRuns) {
+  TombstoneDptMap m;
+  m.Add(10, 5, 100);
+  m.Add(11, 5, 100);
+  m.Add(9, 5, 100);
+  ASSERT_EQ(m.Size(), 1U);
+  ASSERT_EQ(m.entries()[0], (TombstoneDpt{9, 11, 5, 100}));
+
+  // A different DPT starts a new run; filling the gap does not merge it.
+  m.Add(13, 7, 100);
+  m.Add(12, 5, 100);
+  ASSERT_EQ(m.Size(), 2U);
+  ASSERT_EQ(m.entries()[0], (TombstoneDpt{9, 12, 5, 100}));
+  ASSERT_EQ(m.entries()[1], (TombstoneDpt{13, 13, 7, 100}));
+
+  // Out-of-order insertion stays sorted.
+  m.Add(3, 1, 50);
+  ASSERT_EQ(m.entries()[0], (TombstoneDpt{3, 3, 1, 50}));
+
+  // A covered seqno makes the entry's deadline earlier.
+  m.Add(10, 2, 90);
+  ASSERT_EQ(m.entries()[1], (TombstoneDpt{9, 12, 2, 90}));
+  // The combined deadline runs through the earlier start and the earlier end:
+  // start min(90, 80) = 80, end min(92, 80 + 50) = 92.
+  m.Add(11, 50, 80);
+  ASSERT_EQ(m.entries()[1], (TombstoneDpt{9, 12, 12, 80}));
+
+  // Joining two runs with the same DPT and time.
+  TombstoneDptMap j;
+  j.Add(1, 5, 100);
+  j.Add(3, 5, 100);
+  j.Add(2, 5, 100);
+  ASSERT_EQ(j.Size(), 1U);
+  ASSERT_EQ(j.entries()[0], (TombstoneDpt{1, 3, 5, 100}));
+}
+
+TEST(TombstoneDptMapTest, Find) {
+  TombstoneDptMap m;
+  ASSERT_EQ(m.Find(1), nullptr);
+  m.Add(TombstoneDpt{10, 20, 5, 100});
+  m.Add(TombstoneDpt{30, 30, 6, 100});
+  ASSERT_EQ(m.Find(9), nullptr);
+  ASSERT_EQ(m.Find(10)->dpt, 5U);
+  ASSERT_EQ(m.Find(20)->dpt, 5U);
+  ASSERT_EQ(m.Find(21), nullptr);
+  ASSERT_EQ(m.Find(30)->dpt, 6U);
+  ASSERT_EQ(m.Find(31), nullptr);
+}
+
+TEST(TombstoneDptMapTest, MergeCombinesOverlaps) {
+  TombstoneDptMap a;
+  a.Add(TombstoneDpt{10, 20, 5, 100});
+  a.Add(TombstoneDpt{40, 50, 9, 300});
+  TombstoneDptMap b;
+  b.Add(TombstoneDpt{15, 25, 8, 50});
+  b.Add(TombstoneDpt{30, 35, 1, 400});
+  a.Merge(b);
+  ASSERT_EQ(a.Size(), 3U);
+  // Start min(100, 50) = 50, end min(105, 58) = 58.
+  ASSERT_EQ(a.entries()[0], (TombstoneDpt{10, 25, 8, 50}));
+  ASSERT_EQ(a.entries()[1], (TombstoneDpt{30, 35, 1, 400}));
+  ASSERT_EQ(a.entries()[2], (TombstoneDpt{40, 50, 9, 300}));
+
+  // An entry spanning several others swallows them.
+  a.Add(TombstoneDpt{20, 45, 3, 200});
+  ASSERT_EQ(a.Size(), 1U);
+  ASSERT_EQ(a.entries()[0], (TombstoneDpt{10, 50, 8, 50}));
+}
+
+TEST(TombstoneDptMapTest, ShrinkIsConservative) {
+  TombstoneDptMap m;
+  for (uint64_t i = 0; i < 100; ++i) {
+    m.Add(i * 10, 1000 - i, 5000 + i);
+  }
+  m.Shrink(8);
+  ASSERT_LE(m.Size(), 8U);
+  for (uint64_t i = 0; i < 100; ++i) {
+    const TombstoneDpt* e = m.Find(i * 10);
+    ASSERT_NE(e, nullptr);
+    // The deadline is linear in the level fraction, so checking both ends
+    // covers every level.
+    ASSERT_LE(e->write_time, 5000 + i);
+    ASSERT_LE(e->write_time + e->dpt, 5000 + i + 1000 - i);
+  }
+}
+
+TEST(TombstoneDptMapTest, EncodeDecode) {
+  TombstoneDptMap m;
+  m.Add(TombstoneDpt{10, 20, 5, 100});
+  m.Add(TombstoneDpt{kMaxSequenceNumber - 1, kMaxSequenceNumber, 6, 7});
+  std::string encoded;
+  m.EncodeTo(&encoded);
+  TombstoneDptMap d;
+  Slice in(encoded);
+  ASSERT_OK(d.DecodeFrom(&in));
+  ASSERT_TRUE(in.empty());
+  ASSERT_EQ(d, m);
+
+  Slice truncated(encoded.data(), encoded.size() - 1);
+  ASSERT_TRUE(d.DecodeFrom(&truncated).IsCorruption());
+
+  // Overlapping entries are rejected.
+  std::string bad;
+  PutVarint64(&bad, 2);
+  for (int i = 0; i < 2; ++i) {
+    PutVarint64(&bad, 10);
+    PutVarint64(&bad, 5);
+    PutVarint64(&bad, 1);
+    PutVarint64(&bad, 1);
+  }
+  Slice bad_in(bad);
+  ASSERT_TRUE(d.DecodeFrom(&bad_in).IsCorruption());
 }
 
 // Counts compactions and flushes by reason.

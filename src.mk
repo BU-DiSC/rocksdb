@@ -88,6 +88,7 @@ LIB_SOURCES =                                                   \
   db/snapshot_impl.cc                                           \
   db/table_cache.cc                                             \
   db/table_properties_collector.cc                              \
+  db/tombstone_dpt.cc                                           \
   db/transaction_log_impl.cc                                    \
   db/trim_history_scheduler.cc                                  \
   db/version_builder.cc                                         \

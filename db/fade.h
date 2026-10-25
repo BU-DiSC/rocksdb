@@ -28,36 +28,60 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-// Returns the cumulative deadline, in seconds since the tombstone was written,
-// for each of the `num_tree_levels` levels of the tree (level 0 first). The
-// last entry always equals `dth`. When `size_ratio` is not above 1 the
-// threshold is split uniformly across levels. Returns an empty vector when
-// FADE is disabled (`dth` is 0) or the tree has no levels.
-inline std::vector<uint64_t> FadeLevelDeadlines(uint64_t dth, double size_ratio,
-                                                int num_tree_levels) {
-  std::vector<uint64_t> deadlines;
-  if (dth == 0 || num_tree_levels <= 0) {
-    return deadlines;
+// Returns, for each of the `num_tree_levels` levels of the tree (level 0
+// first), the fraction of a threshold that a tombstone may have spent by the
+// time it leaves that level. The last entry is exactly 1. When `size_ratio`
+// is not above 1 the threshold is split uniformly across levels. Returns an
+// empty vector when the tree has no levels.
+inline std::vector<long double> FadeLevelFractions(double size_ratio,
+                                                   int num_tree_levels) {
+  std::vector<long double> fractions;
+  if (num_tree_levels <= 0) {
+    return fractions;
   }
-  deadlines.reserve(num_tree_levels);
-  const long double total = static_cast<long double>(dth);
+  fractions.reserve(num_tree_levels);
   const long double levels = static_cast<long double>(num_tree_levels);
   const long double ratio = static_cast<long double>(size_ratio);
   for (int k = 0; k < num_tree_levels; ++k) {
-    long double cumulative;
+    long double fraction;
     if (ratio <= 1.0L) {
-      cumulative = total * (k + 1) / levels;
+      fraction = (k + 1) / levels;
     } else {
       // Sum of d_0 * T^j for j in [0, k], in closed form.
-      cumulative = total * (std::pow(ratio, k + 1) - 1.0L) /
-                   (std::pow(ratio, levels) - 1.0L);
+      fraction =
+          (std::pow(ratio, k + 1) - 1.0L) / (std::pow(ratio, levels) - 1.0L);
     }
-    if (!(cumulative < total)) {
-      cumulative = total;
+    if (!(fraction < 1.0L)) {
+      fraction = 1.0L;
     }
-    deadlines.push_back(static_cast<uint64_t>(cumulative));
+    fractions.push_back(fraction);
   }
-  deadlines.back() = dth;
+  fractions.back() = 1.0L;
+  return fractions;
+}
+
+// The part of `dpt` given by `fraction`, in whole seconds. A fraction of 1
+// yields exactly `dpt`.
+inline uint64_t FadeDeadline(uint64_t dpt, long double fraction) {
+  if (!(fraction < 1.0L)) {
+    return dpt;
+  }
+  return static_cast<uint64_t>(static_cast<long double>(dpt) * fraction);
+}
+
+// Returns the cumulative deadline, in seconds since the tombstone was written,
+// for each of the `num_tree_levels` levels of the tree (level 0 first). The
+// last entry always equals `dth`. Returns an empty vector when FADE is
+// disabled (`dth` is 0) or the tree has no levels.
+inline std::vector<uint64_t> FadeLevelDeadlines(uint64_t dth, double size_ratio,
+                                                int num_tree_levels) {
+  std::vector<uint64_t> deadlines;
+  if (dth == 0) {
+    return deadlines;
+  }
+  for (long double f : FadeLevelFractions(size_ratio, num_tree_levels)) {
+    deadlines.push_back(FadeDeadline(dth, f));
+  }
   return deadlines;
 }
 

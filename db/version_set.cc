@@ -28,6 +28,7 @@
 #include "db/compaction/compaction.h"
 #include "db/compaction/file_pri.h"
 #include "db/dbformat.h"
+#include "db/fade.h"
 #include "db/internal_stats.h"
 #include "db/log_reader.h"
 #include "db/log_writer.h"
@@ -3624,6 +3625,7 @@ void VersionStorageInfo::ComputeCompactionScore(
   ComputeFilesMarkedForPeriodicCompaction(
       immutable_options, mutable_cf_options.periodic_compaction_seconds,
       max_output_level);
+  ComputeFilesWithExpiredTombstones(immutable_options, mutable_cf_options);
   ComputeFilesMarkedForForcedBlobGC(
       mutable_cf_options.blob_garbage_collection_age_cutoff,
       mutable_cf_options.blob_garbage_collection_force_threshold,
@@ -3680,6 +3682,66 @@ void VersionStorageInfo::ComputeExpiredTtlFiles(
       }
     }
   }
+}
+
+void VersionStorageInfo::ComputeFilesWithExpiredTombstones(
+    const ImmutableOptions& ioptions,
+    const MutableCFOptions& mutable_cf_options) {
+  files_with_expired_tombstones_.clear();
+  const uint64_t dth = mutable_cf_options.delete_persistence_threshold;
+  if (dth == 0 || compaction_style_ != CompactionStyle::kCompactionStyleLevel ||
+      base_level_ < 1) {
+    return;
+  }
+
+  int64_t temp_current_time;
+  auto status = ioptions.clock->GetCurrentTime(&temp_current_time);
+  if (!status.ok()) {
+    return;
+  }
+  const uint64_t current_time = static_cast<uint64_t>(temp_current_time);
+
+  // The tree levels are L0 followed by base_level_ through the last non-empty
+  // level. With no data below L0, the base level is the (empty) last tree
+  // level so that L0 tombstones still have a deadline.
+  int last_level = base_level_;
+  for (int level = num_levels() - 1; level > base_level_; level--) {
+    if (!files_[level].empty()) {
+      last_level = level;
+      break;
+    }
+  }
+  const int num_tree_levels = 1 + last_level - base_level_ + 1;
+  const std::vector<uint64_t> deadlines = FadeLevelDeadlines(
+      dth, mutable_cf_options.max_bytes_for_level_multiplier, num_tree_levels);
+
+  // Files in the last tree level have nowhere further down to go.
+  for (int level = 0; level < last_level; level++) {
+    // Levels between L0 and the base level are normally empty; treat any
+    // leftover files there like the base level.
+    const int tree_level = level == 0 ? 0 : std::max(1, level - base_level_ + 1);
+    for (FileMetaData* f : files_[level]) {
+      if (!f->being_compacted &&
+          IsTombstoneExpired(f->oldest_tombstone_time, current_time,
+                             deadlines[tree_level])) {
+        files_with_expired_tombstones_.emplace_back(level, f);
+      }
+    }
+  }
+
+  std::sort(files_with_expired_tombstones_.begin(),
+            files_with_expired_tombstones_.end(),
+            [](const std::pair<int, FileMetaData*>& a,
+               const std::pair<int, FileMetaData*>& b) {
+              if (a.first != b.first) {
+                return a.first < b.first;
+              }
+              if (a.second->num_deletions != b.second->num_deletions) {
+                return a.second->num_deletions > b.second->num_deletions;
+              }
+              return a.second->oldest_tombstone_time <
+                     b.second->oldest_tombstone_time;
+            });
 }
 
 void VersionStorageInfo::ComputeFilesMarkedForPeriodicCompaction(

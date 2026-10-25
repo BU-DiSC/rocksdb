@@ -215,6 +215,13 @@ class VersionStorageInfo {
   void ComputeExpiredTtlFiles(const ImmutableOptions& ioptions,
                               const uint64_t ttl);
 
+  // This computes files_with_expired_tombstones_ and is called by
+  // ComputeCompactionScore(). A file has expired tombstones when its oldest
+  // tombstone outlived the FADE deadline of its tree level (see db/fade.h).
+  void ComputeFilesWithExpiredTombstones(
+      const ImmutableOptions& ioptions,
+      const MutableCFOptions& mutable_cf_options);
+
   // This computes files_marked_for_periodic_compaction_ and is called by
   // ComputeCompactionScore()
   void ComputeFilesMarkedForPeriodicCompaction(
@@ -494,6 +501,16 @@ class VersionStorageInfo {
     return files_marked_for_periodic_compaction_;
   }
 
+  // REQUIRES: ComputeCompactionScore has been called
+  // REQUIRES: DB mutex held during access
+  // Used by Leveled Compaction. Sorted by level, then most deletions, then
+  // oldest tombstone.
+  const autovector<std::pair<int, FileMetaData*>>& FilesWithExpiredTombstones()
+      const {
+    assert(finalized_);
+    return files_with_expired_tombstones_;
+  }
+
   void TEST_AddFileMarkedForPeriodicCompaction(int level, FileMetaData* f) {
     files_marked_for_periodic_compaction_.emplace_back(level, f);
   }
@@ -713,6 +730,8 @@ class VersionStorageInfo {
 
   autovector<std::pair<int, FileMetaData*>>
       files_marked_for_periodic_compaction_;
+
+  autovector<std::pair<int, FileMetaData*>> files_with_expired_tombstones_;
 
   // These files are considered bottommost because none of their keys can exist
   // at lower levels. They are not necessarily all in the same level. The marked

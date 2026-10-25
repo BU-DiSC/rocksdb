@@ -492,6 +492,80 @@ TEST_F(VersionStorageInfoTest, DrainUnnecessaryLevel) {
   ASSERT_GT(vstorage_.CompactionScore(1), 10);
 }
 
+TEST_F(VersionStorageInfoTest, FilesWithExpiredTombstones) {
+  ioptions_.level_compaction_dynamic_level_bytes = false;
+  mutable_cf_options_.max_bytes_for_level_multiplier = 10;
+  // Four tree levels (L0 to L3), so the cumulative deadlines are
+  // {10, 110, 1110, 11110}.
+  mutable_cf_options_.delete_persistence_threshold = 11110;
+
+  int64_t now = 0;
+  ASSERT_OK(ioptions_.clock->GetCurrentTime(&now));
+  struct Spec {
+    int level;
+    uint32_t number;
+    uint64_t age;  // 0 means no tombstones
+    uint64_t num_deletions;
+  };
+  const std::vector<Spec> specs = {
+      {0, 1, 5, 1},      // within deadline
+      {0, 2, 20, 1},     // expired
+      {0, 9, 0, 0},      // no tombstones
+      {1, 3, 100, 9},    // within deadline
+      {1, 4, 200, 5},    // expired
+      {1, 5, 300, 5},    // expired, older than file 4
+      {1, 6, 150, 9},    // expired, most deletions
+      {2, 7, 2000, 1},   // expired
+      {3, 8, 99999, 1},  // last level, never picked
+  };
+  for (const Spec& spec : specs) {
+    const std::string key = std::to_string(spec.number);
+    Add(spec.level, spec.number, key.c_str(), key.c_str(), 1U);
+    FileMetaData* f = vstorage_.LevelFiles(spec.level).back();
+    f->oldest_tombstone_time =
+        spec.age == 0 ? 0 : static_cast<uint64_t>(now) - spec.age;
+    f->num_deletions = spec.num_deletions;
+  }
+  UpdateVersionStorageInfo();
+  vstorage_.ComputeCompactionScore(ioptions_, mutable_cf_options_);
+
+  std::vector<std::pair<int, uint64_t>> picked;
+  for (const auto& [level, f] : vstorage_.FilesWithExpiredTombstones()) {
+    picked.emplace_back(level, f->fd.GetNumber());
+  }
+  ASSERT_EQ(picked, (std::vector<std::pair<int, uint64_t>>{
+                        {0, 2}, {1, 6}, {1, 5}, {1, 4}, {2, 7}}));
+
+  // Files being compacted are skipped.
+  for (FileMetaData* f : vstorage_.LevelFiles(1)) {
+    f->being_compacted = true;
+  }
+  vstorage_.ComputeCompactionScore(ioptions_, mutable_cf_options_);
+  ASSERT_EQ(vstorage_.FilesWithExpiredTombstones().size(), 2U);
+
+  // A zero threshold disables FADE.
+  mutable_cf_options_.delete_persistence_threshold = 0;
+  vstorage_.ComputeCompactionScore(ioptions_, mutable_cf_options_);
+  ASSERT_TRUE(vstorage_.FilesWithExpiredTombstones().empty());
+}
+
+TEST_F(VersionStorageInfoTest, FilesWithExpiredTombstonesOnlyL0) {
+  // With data only in L0, the base level is the (empty) last tree level, so
+  // L0 gets the first of two deadlines: {1, 11}.
+  ioptions_.level_compaction_dynamic_level_bytes = false;
+  mutable_cf_options_.max_bytes_for_level_multiplier = 10;
+  mutable_cf_options_.delete_persistence_threshold = 11;
+
+  int64_t now = 0;
+  ASSERT_OK(ioptions_.clock->GetCurrentTime(&now));
+  Add(0, 1U, "1", "2", 1U);
+  vstorage_.LevelFiles(0)[0]->oldest_tombstone_time =
+      static_cast<uint64_t>(now) - 5;
+  UpdateVersionStorageInfo();
+  vstorage_.ComputeCompactionScore(ioptions_, mutable_cf_options_);
+  ASSERT_EQ(vstorage_.FilesWithExpiredTombstones().size(), 1U);
+}
+
 TEST_F(VersionStorageInfoTest, EstimateLiveDataSize) {
   // Test whether the overlaps are detected as expected
   Add(1, 1U, "4", "7", 1U);  // Perfect overlap with last level

@@ -13,12 +13,12 @@
 //    data: record[count]
 // record :=
 //    kTypeValue varstring varstring
-//    kTypeDeletion varstring fixed64 fixed64
+//    kTypeDeletion varstring
 //    kTypeSingleDeletion varstring
 //    kTypeRangeDeletion varstring varstring
 //    kTypeMerge varstring varstring
 //    kTypeColumnFamilyValue varint32 varstring varstring
-//    kTypeColumnFamilyDeletion varint32 varstring fixed64 fixed64
+//    kTypeColumnFamilyDeletion varint32 varstring
 //    kTypeColumnFamilySingleDeletion varint32 varstring
 //    kTypeColumnFamilyRangeDeletion varint32 varstring varstring
 //    kTypeColumnFamilyMerge varint32 varstring varstring
@@ -390,21 +390,12 @@ Status ReadRecordFromWriteBatch(Slice* input, char* tag,
       }
       break;
     case kTypeColumnFamilyDeletion:
-      if (!GetVarint32(input, column_family)) {
-        return Status::Corruption("bad WriteBatch Delete");
-      }
-      FALLTHROUGH_INTENDED;
-    case kTypeDeletion:
-      if (!GetLengthPrefixedSlice(input, key) ||
-          !GetLengthPrefixedSlice(input, value)) {
-        return Status::Corruption("bad WriteBatch Delete");
-      }
-      break;
     case kTypeColumnFamilySingleDeletion:
       if (!GetVarint32(input, column_family)) {
         return Status::Corruption("bad WriteBatch Delete");
       }
       FALLTHROUGH_INTENDED;
+    case kTypeDeletion:
     case kTypeSingleDeletion:
       if (!GetLengthPrefixedSlice(input, key)) {
         return Status::Corruption("bad WriteBatch Delete");
@@ -593,7 +584,7 @@ Status WriteBatchInternal::Iterate(const WriteBatch* wb,
       case kTypeDeletion:
         assert(wb->content_flags_.load(std::memory_order_relaxed) &
                (ContentFlags::DEFERRED | ContentFlags::HAS_DELETE));
-        s = handler->DeleteCFWithValue(column_family, key, value);
+        s = handler->DeleteCF(column_family, key);
         if (LIKELY(s.ok())) {
           empty_batch = false;
           found++;
@@ -1229,10 +1220,9 @@ Status WriteBatchInternal::MarkRollback(WriteBatch* b, const Slice& xid) {
 }
 
 Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
-                                  const Slice& key, const Slice& value) {
+                                  const Slice& key) {
   LocalSavePoint save(b);
   WriteBatchInternal::SetCount(b, WriteBatchInternal::Count(b) + 1);
-  std::string empty_value;
   if (column_family_id == 0) {
     b->rep_.push_back(static_cast<char>(kTypeDeletion));
   } else {
@@ -1240,13 +1230,6 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     PutVarint32(&b->rep_, column_family_id);
   }
   PutLengthPrefixedSlice(&b->rep_, key);
-  if (!value.empty()) {
-    PutLengthPrefixedSlice(&b->rep_, value);
-  } else {
-    PutFixed64(&empty_value, 0);  // dpt
-    PutFixed64(&empty_value, 0);  // current time
-    PutLengthPrefixedSlice(&b->rep_, empty_value);
-  }
   b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
                               ContentFlags::HAS_DELETE,
                           std::memory_order_relaxed);
@@ -1308,53 +1291,10 @@ Status WriteBatch::Delete(ColumnFamilyHandle* column_family, const Slice& key,
   return s;
 }
 
-Status WriteBatch::Delete(ColumnFamilyHandle* column_family, const Slice& key,
-                          const uint64_t dpt) {
-  if (key.size() > size_t{std::numeric_limits<uint32_t>::max()}) {
-    return Status::InvalidArgument("key is too large");
-  }
-
-  auto dbo = static_cast_with_check<ColumnFamilyHandleImpl>(column_family)
-                 ->db()
-                 ->immutable_db_options();
-  ROCKS_LOG_INFO(dbo.info_log, "(FADE) WriteBatch::Delete with DPT: %ld", dpt);
-  WriteBatch* b = this;
-  LocalSavePoint save(b);
-  WriteBatchInternal::SetCount(b, WriteBatchInternal::Count(b) + 1);
-  std::string value;
-  int64_t _current_time;
-  uint32_t cf_id = column_family->GetID();
-
-  if (0 == cf_id) {
-    b->rep_.push_back(static_cast<char>(kTypeDeletion));
-  } else {
-    b->rep_.push_back(static_cast<char>(kTypeColumnFamilyDeletion));
-    PutVarint32(&b->rep_, cf_id);
-  }
-  PutLengthPrefixedSlice(&b->rep_, key);
-  auto status = dbo.clock->GetCurrentTime(&_current_time);
-  assert(status.ok());
-  const uint64_t current_time = static_cast<uint64_t>(_current_time);
-  PutFixed64(&value, dpt);
-  PutFixed64(&value, current_time);
-  PutLengthPrefixedSlice(&b->rep_, value);
-  b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
-                              ContentFlags::HAS_DELETE,
-                          std::memory_order_relaxed);
-  if (b->prot_info_ != nullptr) {
-    b->prot_info_->entries_.emplace_back(
-        ProtectionInfo64()
-            .ProtectKVO(key, "" /* value */, kTypeDeletion)
-            .ProtectC(cf_id));
-  }
-  return save.commit();
-}
-
 Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
                                   const SliceParts& key) {
   LocalSavePoint save(b);
   WriteBatchInternal::SetCount(b, WriteBatchInternal::Count(b) + 1);
-  std::string empty_value;
   if (column_family_id == 0) {
     b->rep_.push_back(static_cast<char>(kTypeDeletion));
   } else {
@@ -1362,9 +1302,6 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     PutVarint32(&b->rep_, column_family_id);
   }
   PutLengthPrefixedSliceParts(&b->rep_, key);
-  PutFixed64(&empty_value, 0);  // dpt
-  PutFixed64(&empty_value, 0);  // current time
-  PutLengthPrefixedSlice(&b->rep_, empty_value);
   b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
                               ContentFlags::HAS_DELETE,
                           std::memory_order_relaxed);
@@ -2518,17 +2455,11 @@ class MemTableInserter : public WriteBatch::Handler {
   }
 
   Status DeleteCF(uint32_t column_family_id, const Slice& key) override {
-    return DeleteCFWithValue(column_family_id, key, "");
-  }
-
-  Status DeleteCFWithValue(uint32_t column_family_id, const Slice& key,
-                           const Slice& value) override {
     const auto* kv_prot_info = NextProtectionInfo();
     // optimize for non-recovery mode
     if (UNLIKELY(write_after_commit_ && rebuilding_trx_ != nullptr)) {
       // TODO(ajkr): propagate `ProtectionInfoKVOS64`.
-      return WriteBatchInternal::Delete(rebuilding_trx_, column_family_id, key,
-                                        value);
+      return WriteBatchInternal::Delete(rebuilding_trx_, column_family_id, key);
       // else insert the values to the memtable right away
     }
 
@@ -2539,8 +2470,8 @@ class MemTableInserter : public WriteBatch::Handler {
         // The CF is probably flushed and hence no need for insert but we still
         // need to keep track of the keys for upcoming rollback/commit.
         // TODO(ajkr): propagate `ProtectionInfoKVOS64`.
-        ret_status = WriteBatchInternal::Delete(rebuilding_trx_,
-                                                column_family_id, key, value);
+        ret_status =
+            WriteBatchInternal::Delete(rebuilding_trx_, column_family_id, key);
         if (ret_status.ok()) {
           MaybeAdvanceSeq(IsDuplicateKeySeq(column_family_id, key));
         }
@@ -2564,10 +2495,10 @@ class MemTableInserter : public WriteBatch::Handler {
       auto mem_kv_prot_info =
           kv_prot_info->StripC(column_family_id).ProtectS(sequence_);
       mem_kv_prot_info.UpdateO(kTypeDeletion, delete_type);
-      ret_status = DeleteImpl(column_family_id, key, value, delete_type,
+      ret_status = DeleteImpl(column_family_id, key, Slice(), delete_type,
                               &mem_kv_prot_info);
     } else {
-      ret_status = DeleteImpl(column_family_id, key, value, delete_type,
+      ret_status = DeleteImpl(column_family_id, key, Slice(), delete_type,
                               nullptr /* kv_prot_info */);
     }
     // optimize for non-recovery mode
@@ -2578,8 +2509,8 @@ class MemTableInserter : public WriteBatch::Handler {
     if (UNLIKELY(ret_status.ok() && rebuilding_trx_ != nullptr)) {
       assert(!write_after_commit_);
       // TODO(ajkr): propagate `ProtectionInfoKVOS64`.
-      ret_status = WriteBatchInternal::Delete(rebuilding_trx_, column_family_id,
-                                              key, value);
+      ret_status =
+          WriteBatchInternal::Delete(rebuilding_trx_, column_family_id, key);
     }
     if (UNLIKELY(ret_status.IsTryAgain())) {
       DecrementProtectionInfoIdxForTryAgain();
@@ -3347,9 +3278,8 @@ class ProtectionInfoUpdater : public WriteBatch::Handler {
     return UpdateProtInfo(cf, key, entity, kTypeWideColumnEntity);
   }
 
-  Status DeleteCFWithValue(uint32_t cf, const Slice& key,
-                           const Slice& value) override {
-    return UpdateProtInfo(cf, key, value, kTypeDeletion);
+  Status DeleteCF(uint32_t cf, const Slice& key) override {
+    return UpdateProtInfo(cf, key, "", kTypeDeletion);
   }
 
   Status SingleDeleteCF(uint32_t cf, const Slice& key) override {

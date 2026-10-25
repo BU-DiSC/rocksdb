@@ -917,7 +917,6 @@ void DBImpl::NotifyOnFlushBegin(ColumnFamilyData* cfd, FileMetaData* file_meta,
     info.smallest_seqno = file_meta->fd.smallest_seqno;
     info.largest_seqno = file_meta->fd.largest_seqno;
     info.flush_reason = flush_reason;
-    info.expiration_time = file_meta->fd.expiration_time;
     for (const auto& listener : immutable_db_options_.listeners) {
       listener->OnFlushBegin(this, info);
     }
@@ -1872,7 +1871,7 @@ Status DBImpl::ReFitLevel(ColumnFamilyData* cfd, int level, int target_level) {
           f->oldest_ancester_time, f->file_creation_time, f->epoch_number,
           f->file_checksum, f->file_checksum_func_name, f->unique_id,
           f->compensated_range_deletion_size, f->tail_size,
-          f->user_defined_timestamps_persisted, f->fd.expiration_time);
+          f->user_defined_timestamps_persisted);
     }
     ROCKS_LOG_DEBUG(immutable_db_options_.info_log,
                     "[%s] Apply version edit:\n%s", cfd->GetName().c_str(),
@@ -3789,7 +3788,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
             f->file_creation_time, f->epoch_number, f->file_checksum,
             f->file_checksum_func_name, f->unique_id,
             f->compensated_range_deletion_size, f->tail_size,
-            f->user_defined_timestamps_persisted, f->fd.expiration_time);
+            f->user_defined_timestamps_persisted);
 
         ROCKS_LOG_BUFFER(
             log_buffer,

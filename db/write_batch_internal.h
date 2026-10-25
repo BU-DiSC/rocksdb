@@ -98,12 +98,7 @@ class WriteBatchInternal {
                        const SliceParts& key);
 
   static Status Delete(WriteBatch* batch, uint32_t column_family_id,
-                       const Slice& key, const Slice& value);
-
-  static Status Delete(WriteBatch* batch, uint32_t column_family_id,
-                       const Slice& key) {
-    return Delete(batch, column_family_id, key, "");
-  }
+                       const Slice& key);
 
   static Status SingleDelete(WriteBatch* batch, uint32_t column_family_id,
                              const SliceParts& key);

@@ -155,11 +155,6 @@ class DBImplSecondary : public DBImpl {
                 const Slice& /*key*/) override {
     return Status::NotSupported("Not supported operation in secondary mode.");
   }
-  Status Delete(const WriteOptions& /*options*/,
-                ColumnFamilyHandle* /*column_family*/,
-                const Slice& /*key*/, uint64_t /*dpt*/) override {
-    return Status::NotSupported("Not supported operation in secondary mode.");
-  }
 
   using DBImpl::SingleDelete;
   Status SingleDelete(const WriteOptions& /*options*/,

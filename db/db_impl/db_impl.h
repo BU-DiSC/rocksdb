@@ -1257,6 +1257,10 @@ class DBImpl : public DB {
   // populate_historical_seconds, now].
   void RecordSeqnoToTimeMapping(uint64_t populate_historical_seconds);
 
+  // Schedules compaction for column families whose tombstones outlived their
+  // FADE deadline (delete_persistence_threshold). Runs periodically.
+  void TriggerCompaction();
+
   // Everytime DB's seqno to time mapping changed (which already hold the db
   // mutex), we install a new SuperVersion in each column family with a shared
   // copy of the new mapping while holding the db mutex.

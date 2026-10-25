@@ -13,6 +13,7 @@
 #include <alloca.h>
 #endif
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdio>
 #include <map>
@@ -287,6 +288,8 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
       PeriodicTaskType::kRecordSeqnoTime, [this]() {
         this->RecordSeqnoToTimeMapping(/*populate_historical_seconds=*/0);
       });
+  periodic_task_functions_.emplace(PeriodicTaskType::kTriggerCompaction,
+                                   [this]() { this->TriggerCompaction(); });
 
   versions_.reset(new VersionSet(
       dbname_, &immutable_db_options_, file_options_, table_cache_.get(),
@@ -854,12 +857,18 @@ Status DBImpl::RegisterRecordSeqnoTimeWorker(const ReadOptions& read_options,
 
   uint64_t min_preserve_seconds = std::numeric_limits<uint64_t>::max();
   uint64_t max_preserve_seconds = std::numeric_limits<uint64_t>::min();
+  uint64_t min_dpt = std::numeric_limits<uint64_t>::max();
   bool mapping_was_empty = false;
   {
     InstrumentedMutexLock l(&mutex_);
 
     for (auto cfd : *versions_->GetColumnFamilySet()) {
       uint64_t preserve_seconds = SeqnoTimePreserveSeconds(cfd);
+      uint64_t dpt =
+          cfd->GetLatestMutableCFOptions()->delete_persistence_threshold;
+      if (!cfd->IsDropped() && dpt > 0) {
+        min_dpt = std::min(dpt, min_dpt);
+      }
       if (!cfd->IsDropped() && preserve_seconds > 0) {
         min_preserve_seconds = std::min(preserve_seconds, min_preserve_seconds);
         max_preserve_seconds = std::max(preserve_seconds, max_preserve_seconds);
@@ -959,7 +968,57 @@ Status DBImpl::RegisterRecordSeqnoTimeWorker(const ReadOptions& read_options,
         seqno_time_cadence);
   }
 
+  // FADE: tombstones expire with time, not writes, so recheck periodically.
+  // The mapping dates writes to within one recording cadence, so checking
+  // more often gains nothing. Cap the period so large thresholds still
+  // react within a minute.
+  if (s.ok()) {
+    if (min_dpt == std::numeric_limits<uint64_t>::max()) {
+      s = periodic_task_scheduler_.Unregister(
+          PeriodicTaskType::kTriggerCompaction);
+    } else {
+      constexpr uint64_t kMaxTriggerPeriodSeconds = 60;
+      const uint64_t period =
+          std::clamp<uint64_t>(min_dpt / kMaxSeqnoTimePairsPerCF, 1,
+                               kMaxTriggerPeriodSeconds);
+      s = periodic_task_scheduler_.Register(
+          PeriodicTaskType::kTriggerCompaction,
+          periodic_task_functions_.at(PeriodicTaskType::kTriggerCompaction),
+          period);
+    }
+  }
+
   return s;
+}
+
+void DBImpl::TriggerCompaction() {
+  if (shutdown_initiated_) {
+    return;
+  }
+  TEST_SYNC_POINT("DBImpl::TriggerCompaction:StartRunning");
+  InstrumentedMutexLock l(&mutex_);
+  bool enqueued = false;
+  for (auto cfd : *versions_->GetColumnFamilySet()) {
+    if (cfd->IsDropped() || !cfd->initialized()) {
+      continue;
+    }
+    const MutableCFOptions* mutable_cf_options =
+        cfd->GetLatestMutableCFOptions();
+    if (mutable_cf_options->delete_persistence_threshold == 0 ||
+        mutable_cf_options->disable_auto_compactions) {
+      continue;
+    }
+    // Recompute so that newly expired tombstones are seen.
+    cfd->current()->storage_info()->ComputeCompactionScore(
+        *cfd->ioptions(), *mutable_cf_options);
+    if (cfd->NeedsCompaction()) {
+      EnqueuePendingCompaction(cfd);
+      enqueued = true;
+    }
+  }
+  if (enqueued) {
+    MaybeScheduleFlushOrCompaction();
+  }
 }
 
 Status DBImpl::CancelPeriodicTaskScheduler() {

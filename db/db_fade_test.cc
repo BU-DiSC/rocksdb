@@ -251,6 +251,37 @@ TEST_F(DBFadeTest, PicksExpiredL0File) {
   ASSERT_EQ("1,1,0,1", FilesPerLevel());
 }
 
+TEST_F(DBFadeTest, TombstonesReachLastLevelWithoutWrites) {
+  Options options = FadeOptions();
+  options.disable_auto_compactions = false;
+  options.level0_file_num_compaction_trigger = 10;
+  options.max_bytes_for_level_multiplier = 2;
+  auto listener = std::make_shared<CompactionReasonListener>();
+  options.listeners.push_back(listener);
+  DestroyAndReopen(options);
+
+  ASSERT_OK(Put("a", "v"));
+  ASSERT_OK(Put("b", "v"));
+  ASSERT_OK(Put("z", "v"));
+  ASSERT_OK(Flush());
+  MoveFilesToLevel(3);
+
+  Sleep(10 * kCadence);
+  ASSERT_OK(Delete("b"));
+  ASSERT_OK(Flush());
+
+  // No more writes: only the periodic trigger can notice expiry. The
+  // tombstone must be gone from the tree within the threshold, plus one
+  // trigger period of slack per level.
+  Sleep(kDth + 4 * kCadence);
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+
+  ASSERT_GE(listener->Count(CompactionReason::kDeletePersistence), 3);
+  ASSERT_EQ("0,0,0,1", FilesPerLevel());
+  ASSERT_EQ(Files()[3][0].num_deletions, 0u);
+  ASSERT_EQ("NOT_FOUND", Get("b"));
+}
+
 TEST_F(DBFadeTest, ZeroThresholdNeverPicks) {
   Options options = FadeOptions();
   options.delete_persistence_threshold = 0;

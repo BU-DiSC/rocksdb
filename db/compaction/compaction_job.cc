@@ -287,9 +287,11 @@ void CompactionJob::Prepare() {
   // collect all seqno->time information from the input files which will be used
   // to encode seqno->time to the output files.
 
+  // FADE needs the mapping to date the tombstones of each output file.
   uint64_t preserve_time_duration =
-      std::max(c->immutable_options()->preserve_internal_time_seconds,
-               c->immutable_options()->preclude_last_level_data_seconds);
+      std::max({c->immutable_options()->preserve_internal_time_seconds,
+                c->immutable_options()->preclude_last_level_data_seconds,
+                c->mutable_cf_options()->delete_persistence_threshold});
 
   if (preserve_time_duration > 0) {
     const ReadOptions read_options(Env::IOActivity::kCompaction);
@@ -1579,7 +1581,10 @@ Status CompactionJob::FinishCompactionOutputFile(
 
   const uint64_t current_entries = outputs.NumEntries();
 
-  s = outputs.Finish(s, seqno_to_time_mapping_);
+  s = outputs.Finish(s, seqno_to_time_mapping_,
+                     sub_compact->compaction->MinInputFileOldestTombstoneTime(
+                         meta->smallest.size() > 0 ? &meta->smallest : nullptr,
+                         meta->largest.size() > 0 ? &meta->largest : nullptr));
 
   if (s.ok()) {
     // With accurate smallest and largest key, we can get a slightly more

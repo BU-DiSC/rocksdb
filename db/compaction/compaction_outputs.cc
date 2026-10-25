@@ -11,6 +11,7 @@
 #include "db/compaction/compaction_outputs.h"
 
 #include "db/builder.h"
+#include "db/fade.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -20,7 +21,8 @@ void CompactionOutputs::NewBuilder(const TableBuilderOptions& tboptions) {
 
 Status CompactionOutputs::Finish(
     const Status& intput_status,
-    const SeqnoToTimeMapping& seqno_to_time_mapping) {
+    const SeqnoToTimeMapping& seqno_to_time_mapping,
+    uint64_t oldest_tombstone_time_fallback) {
   FileMetaData* meta = GetMetaData();
   assert(meta != nullptr);
   Status s = intput_status;
@@ -51,6 +53,10 @@ Status CompactionOutputs::Finish(
     meta->marked_for_compaction = builder_->NeedCompact();
     meta->user_defined_timestamps_persisted = static_cast<bool>(
         builder_->GetTableProperties().user_defined_timestamps_persisted);
+    meta->oldest_tombstone_time =
+        EstimateTombstoneTime(&seqno_to_time_mapping,
+                              meta->oldest_tombstone_seqno,
+                              oldest_tombstone_time_fallback);
   }
   current_output().finished = true;
   stats_.bytes_written += current_bytes;

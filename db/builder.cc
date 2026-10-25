@@ -17,6 +17,7 @@
 #include "db/compaction/compaction_iterator.h"
 #include "db/dbformat.h"
 #include "db/event_helpers.h"
+#include "db/fade.h"
 #include "db/internal_stats.h"
 #include "db/merge_helper.h"
 #include "db/output_validator.h"
@@ -354,6 +355,10 @@ Status BuildTable(
       meta->marked_for_compaction = builder->NeedCompact();
       meta->user_defined_timestamps_persisted =
           ioptions.persist_user_defined_timestamps;
+      meta->oldest_tombstone_time = EstimateTombstoneTime(
+          seqno_to_time_mapping.get(), meta->oldest_tombstone_seqno,
+          meta->oldest_ancester_time != 0 ? meta->oldest_ancester_time
+                                          : meta->file_creation_time);
       assert(meta->fd.GetFileSize() > 0);
       tp = builder
                ->GetTableProperties();  // refresh now that builder is finished

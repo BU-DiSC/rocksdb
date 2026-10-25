@@ -6,7 +6,10 @@
 
 #include "db/fade.h"
 
+#include "db/db_test_util.h"
+#include "env/composite_env_wrapper.h"
 #include "port/stack_trace.h"
+#include "test_util/mock_time_env.h"
 #include "test_util/testharness.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -57,10 +60,153 @@ TEST(FadeExpiryTest, Boundary) {
   ASSERT_TRUE(IsTombstoneExpired(1000, 1011, 10));
 }
 
+class DBFadeTest : public DBTestBase {
+ public:
+  DBFadeTest() : DBTestBase("db_fade_test", /*env_do_fsync=*/false) {
+    mock_clock_ = std::make_shared<MockSystemClock>(env_->GetSystemClock());
+    mock_clock_->SetCurrentTime(kMockStartTime);
+    mock_env_ = std::make_unique<CompositeEnvWrapper>(env_, mock_clock_);
+  }
+
+ protected:
+  // Large enough that time arithmetic never underflows.
+  static constexpr uint64_t kMockStartTime = 10000000;
+  static constexpr uint64_t kDth = 1000;
+  // The seqno-to-time mapping records an entry every
+  // dth / kMaxSeqnoTimePairsPerCF seconds.
+  static constexpr uint64_t kCadence = kDth / kMaxSeqnoTimePairsPerCF;
+
+  std::unique_ptr<Env> mock_env_;
+  std::shared_ptr<MockSystemClock> mock_clock_;
+
+  void SetUp() override {
+    mock_clock_->InstallTimedWaitFixCallback();
+    SyncPoint::GetInstance()->SetCallBack(
+        "DBImpl::StartPeriodicTaskScheduler:Init",
+        [mock_clock = mock_clock_](void* arg) {
+          auto periodic_task_scheduler_ptr =
+              static_cast<PeriodicTaskScheduler*>(arg);
+          periodic_task_scheduler_ptr->TEST_OverrideTimer(mock_clock.get());
+        });
+    SyncPoint::GetInstance()->EnableProcessing();
+    mock_clock_->SetCurrentTime(kMockStartTime);
+  }
+
+  void TearDown() override {
+    // The DB must not outlive mock_env_.
+    Close();
+    SyncPoint::GetInstance()->DisableProcessing();
+    SyncPoint::GetInstance()->ClearAllCallBacks();
+  }
+
+  Options FadeOptions() {
+    Options options = CurrentOptions();
+    options.env = mock_env_.get();
+    options.compaction_style = kCompactionStyleLevel;
+    options.delete_persistence_threshold = kDth;
+    options.disable_auto_compactions = true;
+    options.num_levels = 4;
+    return options;
+  }
+
+  uint64_t Now() {
+    int64_t t = 0;
+    EXPECT_OK(mock_clock_->GetCurrentTime(&t));
+    return static_cast<uint64_t>(t);
+  }
+
+  // Advance mock time, letting periodic tasks (seqno-to-time recording, FADE
+  // trigger) run.
+  void Sleep(uint64_t seconds) {
+    for (uint64_t i = 0; i < seconds; i += kCadence) {
+      dbfull()->TEST_WaitForPeriodicTaskRun([&] {
+        mock_clock_->MockSleepForSeconds(static_cast<int>(kCadence));
+      });
+    }
+  }
+
+  std::vector<std::vector<FileMetaData>> Files() {
+    std::vector<std::vector<FileMetaData>> files;
+    dbfull()->TEST_GetFilesMetaData(db_->DefaultColumnFamily(), &files);
+    return files;
+  }
+};
+
+TEST_F(DBFadeTest, FlushRecordsOldestTombstoneTime) {
+  DestroyAndReopen(FadeOptions());
+  Sleep(10 * kCadence);
+  const uint64_t put_time = Now();
+  ASSERT_OK(Put("a", "v"));
+  Sleep(10 * kCadence);
+  const uint64_t delete_time = Now();
+  ASSERT_OK(Delete("b"));
+  Sleep(10 * kCadence);
+  ASSERT_OK(Delete("c"));
+  Sleep(10 * kCadence);
+  ASSERT_OK(Flush());
+
+  ASSERT_OK(Put("d", "v"));
+  ASSERT_OK(Flush());
+
+  auto files = Files();
+  ASSERT_EQ(files[0].size(), 2u);
+  // L0 files are ordered newest first.
+  ASSERT_EQ(files[0][0].oldest_tombstone_time, 0u);
+  // The mapping dates a write no later than it happened, and no earlier than
+  // the first recording of the preceding seqno.
+  const uint64_t t = files[0][1].oldest_tombstone_time;
+  ASSERT_LE(t, delete_time);
+  ASSERT_GE(t, put_time);
+}
+
+TEST_F(DBFadeTest, OldestTombstoneTimeSurvivesReopen) {
+  Options options = FadeOptions();
+  DestroyAndReopen(options);
+  Sleep(10 * kCadence);
+  ASSERT_OK(Delete("b"));
+  Sleep(10 * kCadence);
+  ASSERT_OK(Flush());
+  const uint64_t t = Files()[0][0].oldest_tombstone_time;
+  ASSERT_NE(t, 0u);
+
+  Reopen(options);
+  ASSERT_EQ(Files()[0][0].oldest_tombstone_time, t);
+}
+
+TEST_F(DBFadeTest, CompactionKeepsOldestTombstoneTime) {
+  Options options = FadeOptions();
+  DestroyAndReopen(options);
+  // Bottom data so that tombstones are not dropped when compacting to L1.
+  ASSERT_OK(Put("a", "v"));
+  ASSERT_OK(Put("z", "v"));
+  ASSERT_OK(Flush());
+  MoveFilesToLevel(3);
+
+  Sleep(10 * kCadence);
+  const uint64_t first_delete = Now();
+  ASSERT_OK(Delete("b"));
+  ASSERT_OK(Delete("d"));
+  ASSERT_OK(Flush());
+  const uint64_t flushed_time = Files()[0][0].oldest_tombstone_time;
+  ASSERT_NE(flushed_time, 0u);
+  Sleep(10 * kCadence);
+  ASSERT_OK(Delete("c"));
+  ASSERT_OK(Flush());
+
+  // The L0 files overlap, so this is a real compaction rather than a trivial
+  // move. L3 overlaps too, so the tombstones survive it.
+  ASSERT_OK(dbfull()->TEST_CompactRange(0, nullptr, nullptr));
+  ASSERT_EQ("0,1,0,1", FilesPerLevel());
+  const uint64_t t = Files()[1][0].oldest_tombstone_time;
+  ASSERT_LE(t, first_delete);
+  ASSERT_EQ(t, flushed_time);
+}
+
 }  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {
   ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
+  RegisterCustomObjects(argc, argv);
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

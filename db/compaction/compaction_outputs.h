@@ -103,9 +103,11 @@ class CompactionOutputs {
     }
   }
 
-  // Finish the current output file
+  // Finish the current output file. `oldest_tombstone_time_fallback` is used
+  // as the file's oldest tombstone time when the mapping cannot date it.
   Status Finish(const Status& intput_status,
-                const SeqnoToTimeMapping& seqno_to_time_mapping);
+                const SeqnoToTimeMapping& seqno_to_time_mapping,
+                uint64_t oldest_tombstone_time_fallback);
 
   // Update output table properties from table builder
   void UpdateTableProperties() {

@@ -22,6 +22,8 @@
 #include <limits>
 #include <vector>
 
+#include "db/dbformat.h"
+#include "db/seqno_to_time_mapping.h"
 #include "rocksdb/rocksdb_namespace.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -66,6 +68,24 @@ inline bool IsTombstoneExpired(uint64_t oldest_tombstone_time, uint64_t now,
                                uint64_t deadline) {
   return oldest_tombstone_time != 0 && now >= oldest_tombstone_time &&
          now - oldest_tombstone_time > deadline;
+}
+
+// Estimates the write time of the tombstone with sequence number `seqno`.
+// The seqno-to-time mapping yields a time no later than the actual write,
+// so the estimate errs towards expiring early. Returns 0 when there is no
+// tombstone (`seqno` is kMaxSequenceNumber), and `fallback` when there is no
+// mapping or the mapping does not cover `seqno`.
+inline uint64_t EstimateTombstoneTime(const SeqnoToTimeMapping* mapping,
+                                      SequenceNumber seqno,
+                                      uint64_t fallback) {
+  if (seqno == kMaxSequenceNumber) {
+    return 0;
+  }
+  uint64_t t = kUnknownTimeBeforeAll;
+  if (mapping != nullptr && !mapping->Empty()) {
+    t = mapping->GetProximalTimeBeforeSeqno(seqno);
+  }
+  return t != kUnknownTimeBeforeAll ? t : fallback;
 }
 
 }  // namespace ROCKSDB_NAMESPACE

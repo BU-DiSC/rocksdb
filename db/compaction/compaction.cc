@@ -936,6 +936,29 @@ uint64_t Compaction::MinInputFileOldestAncesterTime(
   return min_oldest_ancester_time;
 }
 
+uint64_t Compaction::MinInputFileOldestTombstoneTime(
+    const InternalKey* start, const InternalKey* end) const {
+  uint64_t min_oldest_tombstone_time = 0;
+  const InternalKeyComparator& icmp =
+      column_family_data()->internal_comparator();
+  for (const auto& level_files : inputs_) {
+    for (const auto& file : level_files.files) {
+      if (start != nullptr && icmp.Compare(file->largest, *start) < 0) {
+        continue;
+      }
+      if (end != nullptr && icmp.Compare(file->smallest, *end) > 0) {
+        continue;
+      }
+      const uint64_t t = file->oldest_tombstone_time;
+      if (t != 0 &&
+          (min_oldest_tombstone_time == 0 || t < min_oldest_tombstone_time)) {
+        min_oldest_tombstone_time = t;
+      }
+    }
+  }
+  return min_oldest_tombstone_time;
+}
+
 uint64_t Compaction::MinInputFileEpochNumber() const {
   uint64_t min_epoch_number = std::numeric_limits<uint64_t>::max();
   for (const auto& inputs_per_level : inputs_) {

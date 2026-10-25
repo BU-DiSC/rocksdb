@@ -836,6 +836,17 @@ Status DBImpl::StartPeriodicTaskScheduler() {
   return s;
 }
 
+namespace {
+// How far back a column family needs the seqno-to-time mapping. FADE
+// (delete_persistence_threshold) uses the mapping to date tombstones.
+uint64_t SeqnoTimePreserveSeconds(ColumnFamilyData* cfd) {
+  return std::max(
+      {cfd->ioptions()->preserve_internal_time_seconds,
+       cfd->ioptions()->preclude_last_level_data_seconds,
+       cfd->GetLatestMutableCFOptions()->delete_persistence_threshold});
+}
+}  // namespace
+
 Status DBImpl::RegisterRecordSeqnoTimeWorker(const ReadOptions& read_options,
                                              const WriteOptions& write_options,
                                              bool is_new_db) {
@@ -848,10 +859,7 @@ Status DBImpl::RegisterRecordSeqnoTimeWorker(const ReadOptions& read_options,
     InstrumentedMutexLock l(&mutex_);
 
     for (auto cfd : *versions_->GetColumnFamilySet()) {
-      // preserve time is the max of 2 options.
-      uint64_t preserve_seconds =
-          std::max(cfd->ioptions()->preserve_internal_time_seconds,
-                   cfd->ioptions()->preclude_last_level_data_seconds);
+      uint64_t preserve_seconds = SeqnoTimePreserveSeconds(cfd);
       if (!cfd->IsDropped() && preserve_seconds > 0) {
         min_preserve_seconds = std::min(preserve_seconds, min_preserve_seconds);
         max_preserve_seconds = std::max(preserve_seconds, max_preserve_seconds);
@@ -1274,12 +1282,16 @@ Status DBImpl::SetOptions(
   Status s;
   Status persist_options_status;
   SuperVersionContext sv_context(/* create_superversion */ true);
+  bool dpt_changed = false;
   {
     auto db_options = GetDBOptions();
     InstrumentedMutexLock l(&mutex_);
+    const uint64_t old_dpt =
+        cfd->GetLatestMutableCFOptions()->delete_persistence_threshold;
     s = cfd->SetOptions(db_options, options_map);
     if (s.ok()) {
       new_options = *cfd->GetLatestMutableCFOptions();
+      dpt_changed = new_options.delete_persistence_threshold != old_dpt;
       // Append new version to recompute compaction score.
       VersionEdit dummy_edit;
       s = versions_->LogAndApply(cfd, new_options, read_options, write_options,
@@ -1295,6 +1307,11 @@ Status DBImpl::SetOptions(
     }
   }
   sv_context.Clean();
+  if (s.ok() && dpt_changed) {
+    // FADE needs the seqno-to-time mapping sized for the new threshold.
+    s = RegisterRecordSeqnoTimeWorker(read_options, write_options,
+                                      /* is_new_db */ false);
+  }
 
   ROCKS_LOG_INFO(
       immutable_db_options_.info_log,
@@ -3476,7 +3493,8 @@ Status DBImpl::WrapUpCreateColumnFamilies(
   bool register_worker = false;
   for (auto* opts_ptr : cf_options) {
     if (opts_ptr->preserve_internal_time_seconds > 0 ||
-        opts_ptr->preclude_last_level_data_seconds > 0) {
+        opts_ptr->preclude_last_level_data_seconds > 0 ||
+        opts_ptr->delete_persistence_threshold > 0) {
       register_worker = true;
       break;
     }
@@ -3745,8 +3763,7 @@ Status DBImpl::DropColumnFamilyImpl(ColumnFamilyHandle* column_family) {
     bg_cv_.SignalAll();
   }
 
-  if (cfd->ioptions()->preserve_internal_time_seconds > 0 ||
-      cfd->ioptions()->preclude_last_level_data_seconds > 0) {
+  if (SeqnoTimePreserveSeconds(cfd) > 0) {
     s = RegisterRecordSeqnoTimeWorker(read_options, write_options,
                                       /* is_new_db */ false);
   }

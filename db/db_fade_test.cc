@@ -271,6 +271,9 @@ class DBFadeTest : public DBTestBase {
   // Large enough that time arithmetic never underflows.
   static constexpr uint64_t kMockStartTime = 10000000;
   static constexpr uint64_t kDth = 1000;
+  // A write time for markers late enough that their tombstones do not expire
+  // during a test.
+  static constexpr uint64_t kWriteTime = kMockStartTime + 1000000;
   // The seqno-to-time mapping records an entry every
   // dth / kMaxSeqnoTimePairsPerCF seconds.
   static constexpr uint64_t kCadence = kDth / kMaxSeqnoTimePairsPerCF;
@@ -558,19 +561,19 @@ TEST_F(DBFadeTest, MarkerSetsDptOfFollowingDeletes) {
 
   WriteBatch batch;
   ASSERT_OK(batch.Delete("a"));  // first: before any marker
-  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, 5000));
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, kWriteTime));
   ASSERT_OK(batch.Delete("b"));                 // first + 1
   ASSERT_OK(batch.SingleDelete("c"));           // first + 2
   ASSERT_OK(batch.Put("d", "v"));               // first + 3
   ASSERT_OK(batch.DeleteRange("e", "f"));       // first + 4
-  ASSERT_OK(batch.PutDeletePersistenceThreshold(0, 5000));
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(0, kWriteTime));
   ASSERT_OK(batch.Delete("g"));                 // first + 5
   ASSERT_OK(batch.PutDeletePersistenceThreshold(50, 6000));
   ASSERT_OK(batch.Delete("h"));                 // first + 6
   ASSERT_OK(db_->Write(WriteOptions(), &batch));
 
-  std::vector<TombstoneDpt> expected = {{first + 1, first + 2, 100, 5000},
-                                        {first + 4, first + 4, 100, 5000},
+  std::vector<TombstoneDpt> expected = {{first + 1, first + 2, 100, kWriteTime},
+                                        {first + 4, first + 4, 100, kWriteTime},
                                         {first + 6, first + 6, 50, 6000}};
   ASSERT_EQ(MemtableDpts(db_), expected);
 }
@@ -582,19 +585,20 @@ TEST_F(DBFadeTest, MarkerDoesNotCarryIntoNextBatch) {
   const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
 
   WriteBatch with_marker;
-  ASSERT_OK(with_marker.PutDeletePersistenceThreshold(100, 5000));
+  ASSERT_OK(with_marker.PutDeletePersistenceThreshold(100, kWriteTime));
   ASSERT_OK(with_marker.Delete("a"));
   ASSERT_OK(db_->Write(WriteOptions(), &with_marker));
   ASSERT_OK(Delete("b"));
 
-  std::vector<TombstoneDpt> expected = {{first, first, 100, 5000}};
+  std::vector<TombstoneDpt> expected = {{first, first, 100, kWriteTime}};
   ASSERT_EQ(MemtableDpts(db_), expected);
 }
 
 TEST_F(DBFadeTest, MarkerSurvivesWalReplay) {
   Options options = FadeOptions();
   options.delete_persistence_threshold = 0;
-  // Keep the replayed tombstone in the memtable.
+  // Replay the tombstone into the memtable. The trigger may still flush it,
+  // since a WAL found at recovery counts as old.
   options.avoid_flush_during_recovery = true;
   DestroyAndReopen(options);
   const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
@@ -608,8 +612,57 @@ TEST_F(DBFadeTest, MarkerSurvivesWalReplay) {
   Reopen(options);
 
   std::vector<TombstoneDpt> expected = {{first, first, 100, write_time}};
-  ASSERT_EQ(MemtableDpts(db_), expected);
+  ASSERT_EQ(AllDpts(db_).entries(), expected);
 }
+
+class DBFadeWriteGroupTest
+    : public DBFadeTest,
+      public testing::WithParamInterface<std::tuple<bool, bool>> {};
+
+// A marker applies only to its own batch when batches share a write group,
+// whether the leader writes the whole group or each writer its own batch.
+TEST_P(DBFadeWriteGroupTest, MarkerStaysInItsBatch) {
+  const bool leader_has_marker = std::get<0>(GetParam());
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  options.allow_concurrent_memtable_write = std::get<1>(GetParam());
+  DestroyAndReopen(options);
+  const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
+  const uint64_t write_time = Now();
+
+  WriteBatch with_marker;
+  ASSERT_OK(with_marker.PutDeletePersistenceThreshold(100, write_time));
+  ASSERT_OK(with_marker.Delete("a"));
+  WriteBatch without_marker;
+  ASSERT_OK(without_marker.Delete("b"));
+  WriteBatch* leader_batch = leader_has_marker ? &with_marker : &without_marker;
+  WriteBatch* follower_batch =
+      leader_has_marker ? &without_marker : &with_marker;
+
+  // The follower joins once the leader is linked, and the leader forms the
+  // group once the follower waits.
+  SyncPoint::GetInstance()->LoadDependency(
+      {{"WriteThread::JoinBatchGroup:Wait", "DBFadeWriteGroupTest:Follow"},
+       {"WriteThread::JoinBatchGroup:BeganWaiting",
+        "DBImpl::WriteImpl:BeforeLeaderEnters"}});
+  port::Thread leader(
+      [&] { ASSERT_OK(db_->Write(WriteOptions(), leader_batch)); });
+  TEST_SYNC_POINT("DBFadeWriteGroupTest:Follow");
+  port::Thread follower(
+      [&] { ASSERT_OK(db_->Write(WriteOptions(), follower_batch)); });
+  leader.join();
+  follower.join();
+  SyncPoint::GetInstance()->LoadDependency({});
+
+  ASSERT_EQ(db_->GetLatestSequenceNumber(), first + 1);
+  const SequenceNumber marked = leader_has_marker ? first : first + 1;
+  std::vector<TombstoneDpt> expected = {{marked, marked, 100, write_time}};
+  ASSERT_EQ(AllDpts(db_).entries(), expected);
+}
+
+INSTANTIATE_TEST_CASE_P(DBFadeWriteGroupTest, DBFadeWriteGroupTest,
+                        ::testing::Combine(::testing::Bool(),
+                                           ::testing::Bool()));
 
 class DBFadeTwoPhaseTest
     : public DBFadeTest,
@@ -638,7 +691,8 @@ TEST_P(DBFadeTwoPhaseTest, MarkerSurvivesRecovery) {
   Transaction* txn = txn_db->BeginTransaction(write_options);
   ASSERT_OK(txn->SetName("t"));
   ASSERT_OK(txn->Put("a", "v"));
-  txn->PutLogData(WriteBatch::DeletePersistenceThresholdLogData(100, 5000));
+  txn->PutLogData(
+      WriteBatch::DeletePersistenceThresholdLogData(100, kWriteTime));
   ASSERT_OK(txn->Delete("b"));
   ASSERT_OK(txn->Prepare());
   if (commit_before_crash) {
@@ -660,7 +714,7 @@ TEST_P(DBFadeTwoPhaseTest, MarkerSurvivesRecovery) {
   ASSERT_EQ(entries.size(), 1u);
   ASSERT_EQ(entries[0].first_seqno, entries[0].last_seqno);
   ASSERT_EQ(entries[0].dpt, 100u);
-  ASSERT_EQ(entries[0].write_time, 5000u);
+  ASSERT_EQ(entries[0].write_time, kWriteTime);
   std::string value;
   ASSERT_TRUE(txn_db->Get(ReadOptions(), "b", &value).IsNotFound());
   ASSERT_OK(txn_db->Get(ReadOptions(), "a", &value));
@@ -678,7 +732,7 @@ TEST_F(DBFadeTest, FlushCarriesTombstoneDpts) {
   const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
 
   WriteBatch batch;
-  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, 5000));
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, kWriteTime));
   ASSERT_OK(batch.Delete("a"));            // first
   ASSERT_OK(batch.DeleteRange("c", "d"));  // first + 1
   ASSERT_OK(batch.Put("x", "v"));          // first + 2
@@ -687,7 +741,7 @@ TEST_F(DBFadeTest, FlushCarriesTombstoneDpts) {
   ASSERT_OK(Flush());
 
   TombstoneDptMap expected;
-  expected.Add(TombstoneDpt{first, first + 1, 100, 5000});
+  expected.Add(TombstoneDpt{first, first + 1, 100, kWriteTime});
   auto files = Files();
   ASSERT_EQ(files[0].size(), 1u);
   ASSERT_EQ(files[0][0].tombstone_dpts, expected);
@@ -710,7 +764,7 @@ TEST_F(DBFadeTest, CompactionCarriesTombstoneDpts) {
 
   const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
   WriteBatch batch;
-  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, 5000));
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(100, kWriteTime));
   ASSERT_OK(batch.Delete("b"));  // first
   ASSERT_OK(batch.Delete("e"));  // first + 1
   ASSERT_OK(db_->Write(WriteOptions(), &batch));
@@ -728,7 +782,7 @@ TEST_F(DBFadeTest, CompactionCarriesTombstoneDpts) {
   ASSERT_OK(dbfull()->TEST_CompactRange(0, nullptr, nullptr));
   ASSERT_EQ("0,1,0,1", FilesPerLevel());
   TombstoneDptMap expected;
-  expected.Add(TombstoneDpt{first + 1, first + 1, 100, 5000});
+  expected.Add(TombstoneDpt{first + 1, first + 1, 100, kWriteTime});
   expected.Add(TombstoneDpt{first + 2, first + 3, 30, 6000});
   ASSERT_EQ(Files()[1][0].tombstone_dpts, expected);
 }

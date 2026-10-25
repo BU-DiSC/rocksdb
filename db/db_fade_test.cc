@@ -865,6 +865,35 @@ TEST_F(DBFadePerDeleteTest, RangeTombstoneReachesLastLevel) {
   ASSERT_EQ("v", Get("z"));
 }
 
+// A quiet column family pins the WAL that still holds a deleted value. The
+// trigger flushes it once the WAL is older than the threshold, so the WAL is
+// deleted.
+TEST_F(DBFadePerDeleteTest, OldWalIsReleased) {
+  Options options = PerDeleteOptions();
+  DestroyAndReopen(options);
+  CreateAndReopenWithCF({"quiet"}, options);
+
+  ASSERT_OK(Put(1, "q", "v"));
+  ASSERT_OK(Put("k", "v"));
+  std::unique_ptr<WalFile> old_wal;
+  ASSERT_OK(db_->GetCurrentWalFile(&old_wal));
+  ASSERT_OK(Flush());
+
+  DeleteWithDpt("k", 100);
+  SleepSeconds(100 + 4 * kStep);
+  ASSERT_OK(dbfull()->TEST_WaitForFlushMemTable(handles_[1]));
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+
+  VectorWalPtr wals;
+  ASSERT_OK(db_->GetSortedWalFiles(wals));
+  for (const auto& wal : wals) {
+    ASSERT_GT(wal->LogNumber(), old_wal->LogNumber());
+  }
+  ASSERT_EQ(listener_->Count(FlushReason::kDeletePersistence), 2);
+  ASSERT_EQ("v", Get(1, "q"));
+  ASSERT_EQ("NOT_FOUND", Get("k"));
+}
+
 }  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {

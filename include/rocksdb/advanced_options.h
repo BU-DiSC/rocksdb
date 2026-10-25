@@ -811,6 +811,14 @@ struct AdvancedColumnFamilyOptions {
   // recorded automatically while this option is set. Tombstones written
   // before the option was set use the file's oldest ancestor time instead.
   //
+  // The WAL holds deleted values too. Once a tombstone was written after the
+  // oldest live WAL was created and that WAL is older than the smallest
+  // threshold in use, the column families that keep it are flushed so the
+  // WAL can be deleted. This does not cover WALs kept by an outstanding
+  // prepared transaction, WAL recycling (recycle_log_file_num), archived
+  // WALs (WAL_ttl_seconds, WAL_size_limit_MB), files waiting in the
+  // SstFileManager trash, or copies made by backups and checkpoints.
+  //
   // Only supported with kCompactionStyleLevel; ignored otherwise.
   //
   // Default: 0 (disabled)

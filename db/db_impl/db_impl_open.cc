@@ -2104,6 +2104,9 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
 
     if (s.ok()) {
       impl->alive_log_files_.emplace_back(impl->logfile_number_);
+      impl->alive_log_files_.back().create_time = impl->WalCreateTime();
+      impl->alive_log_files_.back().start_seqno =
+          impl->versions_->LastSequence();
       // In WritePrepared there could be gap in sequence numbers. This breaks
       // the trick we use in kPointInTimeRecovery which assumes the first seq in
       // the log right after the corrupted log is one larger than the last seq

@@ -1262,20 +1262,32 @@ class DBImpl : public DB {
   // FADE deadline (delete_persistence_threshold). Runs periodically.
   void TriggerCompaction();
 
+  // Adds to `cfds`, referenced, the column families whose mutable memtable
+  // keeps the oldest live WAL once that WAL is older than `dpt` seconds, so
+  // that flushing them lets the WAL be deleted. Immutable memtables are
+  // flushed anyway. Requires the DB mutex.
+  void SelectColumnFamiliesPinningOldWal(uint64_t current_time, uint64_t dpt,
+                                         autovector<ColumnFamilyData*>* cfds);
+
   // Notes that a tombstone was written with its own delete persistence
-  // threshold (WriteBatch::PutDeletePersistenceThreshold). Called from the
-  // memtable write path, possibly with the DB mutex held, so it only sets a
-  // flag; MaybeRegisterFadeTrigger acts on it.
-  void NoteExplicitDeletePersistenceThreshold() {
-    if (!explicit_dpt_seen_.load(std::memory_order_relaxed)) {
-      explicit_dpt_seen_.store(true, std::memory_order_relaxed);
+  // threshold `dpt` (WriteBatch::PutDeletePersistenceThreshold). Called from
+  // the memtable write path, possibly with the DB mutex held, so it only
+  // records the smallest such threshold; MaybeRegisterFadeTrigger acts on it.
+  void NoteExplicitDeletePersistenceThreshold(uint64_t dpt) {
+    uint64_t seen = min_explicit_dpt_.load(std::memory_order_relaxed);
+    while (dpt < seen && !min_explicit_dpt_.compare_exchange_weak(
+                             seen, dpt, std::memory_order_relaxed)) {
     }
+  }
+
+  bool ExplicitDptSeen() const {
+    return min_explicit_dpt_.load(std::memory_order_relaxed) != kNoExplicitDpt;
   }
 
   // Registers the FADE trigger with a 1 second period once a tombstone with
   // its own threshold was written. Must not be called with the DB mutex held.
   void MaybeRegisterFadeTrigger() {
-    if (explicit_dpt_seen_.load(std::memory_order_relaxed) &&
+    if (ExplicitDptSeen() &&
         !fade_trigger_every_second_.load(std::memory_order_relaxed)) {
       RegisterFadeTrigger().PermitUncheckedError();
     }
@@ -1746,7 +1758,22 @@ class DBImpl : public DB {
     uint64_t number;
     uint64_t size = 0;
     bool getting_flushed = false;
+    // When the WAL was created, in seconds since the epoch. 0 if unknown, as
+    // for WALs found at recovery.
+    uint64_t create_time = 0;
+    // The last sequence number before the WAL was created. Writes to the WAL
+    // have larger sequence numbers.
+    SequenceNumber start_seqno = 0;
   };
+
+  // The current time for LogFileNumberSize::create_time, or 0 if unknown.
+  uint64_t WalCreateTime() const {
+    int64_t now = 0;
+    if (!immutable_db_options_.clock->GetCurrentTime(&now).ok() || now < 0) {
+      return 0;
+    }
+    return static_cast<uint64_t>(now);
+  }
 
   struct LogWriterNumber {
     // pass ownership of _writer
@@ -2584,9 +2611,15 @@ class DBImpl : public DB {
   // Set by CancelPeriodicTaskScheduler; stops the trigger from coming back.
   // Guarded by fade_trigger_mutex_.
   bool fade_trigger_disabled_ = false;
-  // Whether a tombstone with its own delete persistence threshold was seen
-  // since open, in a write or in the files' metadata.
-  std::atomic<bool> explicit_dpt_seen_{false};
+  // The smallest delete persistence threshold of a tombstone with its own
+  // threshold seen since open, in a write or in the files' metadata, or
+  // kNoExplicitDpt if none was seen.
+  static constexpr uint64_t kNoExplicitDpt =
+      std::numeric_limits<uint64_t>::max();
+  std::atomic<uint64_t> min_explicit_dpt_{kNoExplicitDpt};
+  // Sequence number of the newest tombstone in a memtable that is no longer
+  // mutable, 0 if none. Guarded by mutex_.
+  SequenceNumber newest_switched_tombstone_seqno_ = 0;
   // Whether the FADE trigger runs every second.
   std::atomic<bool> fade_trigger_every_second_{false};
 

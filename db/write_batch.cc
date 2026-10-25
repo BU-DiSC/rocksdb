@@ -2520,7 +2520,7 @@ class MemTableInserter : public WriteBatch::Handler {
       if (delete_dpt_ > 0) {
         mem->RecordTombstoneDpt(sequence_, delete_dpt_, delete_dpt_write_time_);
         if (db_ != nullptr) {
-          db_->NoteExplicitDeletePersistenceThreshold();
+          db_->NoteExplicitDeletePersistenceThreshold(delete_dpt_);
         }
       }
       MaybeAdvanceSeq();

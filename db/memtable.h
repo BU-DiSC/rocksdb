@@ -75,6 +75,8 @@ struct MemTablePostProcessInfo {
   uint64_t num_entries = 0;
   uint64_t num_deletes = 0;
   uint64_t num_range_deletes = 0;
+  // Sequence number of the newest tombstone (point or range), 0 if none.
+  SequenceNumber newest_tombstone_seqno = 0;
 };
 
 using MultiGetRange = MultiGetContext::Range;
@@ -356,6 +358,9 @@ class MemTable {
       num_range_deletes_.fetch_add(update_counters.num_range_deletes,
                                    std::memory_order_relaxed);
     }
+    if (update_counters.newest_tombstone_seqno != 0) {
+      UpdateNewestTombstoneSeqno(update_counters.newest_tombstone_seqno);
+    }
     UpdateFlushState();
   }
 
@@ -524,6 +529,11 @@ class MemTable {
     return oldest_tombstone_time_.load(std::memory_order_relaxed);
   }
 
+  // Sequence number of the newest tombstone (point or range), 0 if none.
+  SequenceNumber NewestTombstoneSeqno() const {
+    return newest_tombstone_seqno_.load(std::memory_order_relaxed);
+  }
+
   // Records the delete persistence threshold of the tombstone with sequence
   // number `seqno`. Thread safe.
   void RecordTombstoneDpt(SequenceNumber seqno, uint64_t dpt,
@@ -666,6 +676,10 @@ class MemTable {
   // memtable before its tombstones outlive their deadline.
   std::atomic<uint64_t> oldest_tombstone_time_;
 
+  // Sequence number of the newest tombstone, 0 if none. Used by FADE to tell
+  // whether a WAL may hold a value deleted later.
+  std::atomic<SequenceNumber> newest_tombstone_seqno_{0};
+
   // Entries kept in tombstone_dpts_ before neighbours are merged. Merging only
   // makes deadlines earlier.
   static constexpr size_t kMaxTombstoneDpts = 1024;
@@ -711,6 +725,14 @@ class MemTable {
   void UpdateOldestKeyTime();
 
   void UpdateOldestTombstoneTime();
+
+  void UpdateNewestTombstoneSeqno(SequenceNumber seqno) {
+    SequenceNumber newest =
+        newest_tombstone_seqno_.load(std::memory_order_relaxed);
+    while (seqno > newest && !newest_tombstone_seqno_.compare_exchange_weak(
+                                 newest, seqno, std::memory_order_relaxed)) {
+    }
+  }
 
   void GetFromTable(const LookupKey& key,
                     SequenceNumber max_covering_tombstone_seq, bool do_merge,

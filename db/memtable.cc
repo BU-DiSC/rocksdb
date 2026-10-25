@@ -314,6 +314,7 @@ void MemTable::InheritTombstoneMetadata(const MemTable& other) {
                std::memory_order_relaxed)) {
     }
   }
+  UpdateNewestTombstoneSeqno(other.NewestTombstoneSeqno());
   const TombstoneDptMap other_dpts = other.GetTombstoneDpts();
   if (!other_dpts.Empty()) {
     std::lock_guard<std::mutex> lock(tombstone_dpts_mutex_);
@@ -952,6 +953,12 @@ Status MemTable::Add(SequenceNumber s, ValueType type,
   if (type == kTypeDeletion || type == kTypeSingleDeletion ||
       type == kTypeDeletionWithTimestamp || type == kTypeRangeDeletion) {
     UpdateOldestTombstoneTime();
+    if (allow_concurrent) {
+      post_process_info->newest_tombstone_seqno =
+          std::max(s, post_process_info->newest_tombstone_seqno);
+    } else if (s > newest_tombstone_seqno_.load(std::memory_order_relaxed)) {
+      newest_tombstone_seqno_.store(s, std::memory_order_relaxed);
+    }
   }
   if (type == kTypeRangeDeletion) {
     auto new_cache = std::make_shared<FragmentedRangeTombstoneListCache>();

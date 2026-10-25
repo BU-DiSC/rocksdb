@@ -2318,6 +2318,8 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
       log_dir_synced_ = false;
       logs_.emplace_back(logfile_number_, new_log);
       alive_log_files_.emplace_back(logfile_number_);
+      alive_log_files_.back().create_time = WalCreateTime();
+      alive_log_files_.back().start_seqno = versions_->LastSequence();
     }
   }
 
@@ -2406,6 +2408,8 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
   }
 
   cfd->mem()->SetNextLogNumber(logfile_number_);
+  newest_switched_tombstone_seqno_ = std::max(
+      cfd->mem()->NewestTombstoneSeqno(), newest_switched_tombstone_seqno_);
   assert(new_mem != nullptr);
   cfd->imm()->Add(cfd->mem(), &context->memtables_to_free_);
   new_mem->Ref();

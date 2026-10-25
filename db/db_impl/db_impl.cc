@@ -976,7 +976,7 @@ Status DBImpl::RegisterFadeTrigger() {
     return Status::OK();
   }
   uint64_t min_dpt = std::numeric_limits<uint64_t>::max();
-  bool explicit_dpt = explicit_dpt_seen_.load(std::memory_order_relaxed);
+  uint64_t min_file_dpt = kNoExplicitDpt;
   {
     InstrumentedMutexLock l(&mutex_);
     for (auto cfd : *versions_->GetColumnFamilySet()) {
@@ -991,20 +991,19 @@ Status DBImpl::RegisterFadeTrigger() {
       // Files written before this open may hold tombstones with their own
       // thresholds.
       const VersionStorageInfo* vstorage = cfd->current()->storage_info();
-      for (int level = 0; !explicit_dpt && level < vstorage->num_levels();
-           level++) {
+      for (int level = 0; level < vstorage->num_levels(); level++) {
         for (const FileMetaData* f : vstorage->LevelFiles(level)) {
-          if (!f->tombstone_dpts.Empty()) {
-            explicit_dpt = true;
-            break;
+          for (const TombstoneDpt& e : f->tombstone_dpts.entries()) {
+            min_file_dpt = std::min(e.dpt, min_file_dpt);
           }
         }
       }
     }
   }
-  if (explicit_dpt) {
-    explicit_dpt_seen_.store(true, std::memory_order_relaxed);
+  if (min_file_dpt != kNoExplicitDpt) {
+    NoteExplicitDeletePersistenceThreshold(min_file_dpt);
   }
+  const bool explicit_dpt = ExplicitDptSeen();
 
   // FADE: tombstones expire with time, not writes, so recheck periodically.
   // For a column family threshold, the mapping dates writes to within one
@@ -1052,6 +1051,9 @@ void DBImpl::TriggerCompaction() {
   autovector<ColumnFamilyData*> cfds_to_flush;
   {
     InstrumentedMutexLock l(&mutex_);
+    const bool explicit_dpt = ExplicitDptSeen();
+    // The smallest threshold of any tombstone that may be in the WALs.
+    uint64_t min_dpt = min_explicit_dpt_.load(std::memory_order_relaxed);
     bool enqueued = false;
     for (auto cfd : *versions_->GetColumnFamilySet()) {
       if (cfd->IsDropped() || !cfd->initialized()) {
@@ -1060,7 +1062,10 @@ void DBImpl::TriggerCompaction() {
       const MutableCFOptions* mutable_cf_options =
           cfd->GetLatestMutableCFOptions();
       const uint64_t cf_dpt = mutable_cf_options->delete_persistence_threshold;
-      if (cf_dpt == 0 && !explicit_dpt_seen_.load(std::memory_order_relaxed)) {
+      if (cf_dpt > 0) {
+        min_dpt = std::min(cf_dpt, min_dpt);
+      }
+      if (cf_dpt == 0 && !explicit_dpt) {
         continue;
       }
       VersionStorageInfo* vstorage = cfd->current()->storage_info();
@@ -1092,6 +1097,9 @@ void DBImpl::TriggerCompaction() {
     if (enqueued) {
       MaybeScheduleFlushOrCompaction();
     }
+    if (min_dpt != kNoExplicitDpt) {
+      SelectColumnFamiliesPinningOldWal(current_time, min_dpt, &cfds_to_flush);
+    }
   }
 
   if (cfds_to_flush.empty()) {
@@ -1117,6 +1125,62 @@ void DBImpl::TriggerCompaction() {
   InstrumentedMutexLock l(&mutex_);
   for (ColumnFamilyData* cfd : cfds_to_flush) {
     cfd->UnrefAndTryDelete();
+  }
+}
+
+void DBImpl::SelectColumnFamiliesPinningOldWal(
+    uint64_t current_time, uint64_t dpt, autovector<ColumnFamilyData*>* cfds) {
+  mutex_.AssertHeld();
+  uint64_t oldest_alive_log = 0;
+  uint64_t create_time = 0;
+  SequenceNumber start_seqno = 0;
+  {
+    InstrumentedMutexLock wl(&log_write_mutex_);
+    if (alive_log_files_.empty()) {
+      return;
+    }
+    const LogFileNumberSize& oldest = alive_log_files_.front();
+    oldest_alive_log = oldest.number;
+    create_time = oldest.create_time;
+    start_seqno = oldest.start_seqno;
+  }
+  // A value in the WAL lives as long as the WAL. A tombstone written after the
+  // WAL was created expires no earlier than `dpt` after that, so releasing
+  // the WAL by then is enough. A WAL found at recovery has no creation time,
+  // so it is released right away.
+  if (current_time <= create_time || current_time - create_time <= dpt) {
+    return;
+  }
+  if (create_time != 0) {
+    SequenceNumber newest_tombstone = newest_switched_tombstone_seqno_;
+    for (auto cfd : *versions_->GetColumnFamilySet()) {
+      if (!cfd->IsDropped() && cfd->initialized()) {
+        newest_tombstone =
+            std::max(cfd->mem()->NewestTombstoneSeqno(), newest_tombstone);
+      }
+    }
+    if (newest_tombstone <= start_seqno) {
+      // Nothing was deleted since, so the WAL holds no deleted value.
+      return;
+    }
+  }
+  if (allow_2pc()) {
+    // An outstanding prepared transaction keeps the WAL until it is
+    // committed or rolled back; flushing cannot release it.
+    const uint64_t oldest_log_with_prep =
+        logs_with_prep_tracker_.FindMinLogContainingOutstandingPrep();
+    if (oldest_log_with_prep > 0 && oldest_log_with_prep <= oldest_alive_log) {
+      return;
+    }
+  }
+  for (auto cfd : *versions_->GetColumnFamilySet()) {
+    if (cfd->IsDropped() || !cfd->initialized() ||
+        cfd->OldestLogToKeep() > oldest_alive_log || cfd->mem()->IsEmpty() ||
+        std::find(cfds->begin(), cfds->end(), cfd) != cfds->end()) {
+      continue;
+    }
+    cfd->Ref();
+    cfds->push_back(cfd);
   }
 }
 

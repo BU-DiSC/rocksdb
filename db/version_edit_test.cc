@@ -271,6 +271,59 @@ TEST_F(VersionEditTest, NewFile4NotSupportedField) {
   ASSERT_NOK(s);
 }
 
+TEST_F(VersionEditTest, EncodeDecodeOldestTombstoneTime) {
+  static_assert(NewFileCustomTag::kOldestTombstoneTime <
+                    NewFileCustomTag::kCustomTagNonSafeIgnoreMask,
+                "older releases must be able to ignore the field");
+  VersionEdit edit;
+  edit.AddFile(1, 300, 0, 100, InternalKey("foo", 500, kTypeValue),
+               InternalKey("zoo", 600, kTypeDeletion), 500, 600, false,
+               Temperature::kUnknown, kInvalidBlobFileNumber,
+               kUnknownOldestAncesterTime, kUnknownFileCreationTime,
+               300 /* epoch_number */, kUnknownFileChecksum,
+               kUnknownFileChecksumFuncName, kNullUniqueId64x2, 0, 0, true);
+  edit.SetOldestTombstoneTimeOfLastFile(12345);
+  edit.AddFile(1, 301, 0, 100, InternalKey("foo", 501, kTypeValue),
+               InternalKey("zoo", 601, kTypeValue), 501, 601, false,
+               Temperature::kUnknown, kInvalidBlobFileNumber,
+               kUnknownOldestAncesterTime, kUnknownFileCreationTime,
+               301 /* epoch_number */, kUnknownFileChecksum,
+               kUnknownFileChecksumFuncName, kNullUniqueId64x2, 0, 0, true);
+  TestEncodeDecode(edit);
+
+  std::string encoded;
+  ASSERT_TRUE(edit.EncodeTo(&encoded, 0 /* ts_sz */));
+  VersionEdit parsed;
+  ASSERT_OK(parsed.DecodeFrom(encoded));
+  const auto& new_files = parsed.GetNewFiles();
+  ASSERT_EQ(new_files.size(), 2u);
+  ASSERT_EQ(new_files[0].second.oldest_tombstone_time, 12345u);
+  ASSERT_EQ(new_files[1].second.oldest_tombstone_time, 0u);
+}
+
+TEST_F(VersionEditTest, UpdateBoundariesTracksOldestTombstone) {
+  FileMetaData meta;
+  ASSERT_EQ(meta.oldest_tombstone_seqno, kMaxSequenceNumber);
+  ASSERT_OK(meta.UpdateBoundaries(InternalKey("a", 50, kTypeValue).Encode(),
+                                  Slice(), 50, kTypeValue));
+  ASSERT_EQ(meta.oldest_tombstone_seqno, kMaxSequenceNumber);
+  ASSERT_OK(meta.UpdateBoundaries(InternalKey("b", 40, kTypeDeletion).Encode(),
+                                  Slice(), 40, kTypeDeletion));
+  ASSERT_OK(meta.UpdateBoundaries(
+      InternalKey("c", 30, kTypeSingleDeletion).Encode(), Slice(), 30,
+      kTypeSingleDeletion));
+  ASSERT_OK(meta.UpdateBoundaries(InternalKey("d", 45, kTypeDeletion).Encode(),
+                                  Slice(), 45, kTypeDeletion));
+  ASSERT_EQ(meta.oldest_tombstone_seqno, 30u);
+
+  InternalKeyComparator icmp(BytewiseComparator());
+  meta.UpdateBoundariesForRange(InternalKey("e", 20, kTypeRangeDeletion),
+                                InternalKey("f", kMaxSequenceNumber,
+                                            kTypeRangeDeletion),
+                                20, icmp);
+  ASSERT_EQ(meta.oldest_tombstone_seqno, 20u);
+}
+
 TEST_F(VersionEditTest, EncodeEmptyFile) {
   VersionEdit edit;
   edit.AddFile(0, 0, 0, 0, InternalKey(), InternalKey(), 0, 0, false,

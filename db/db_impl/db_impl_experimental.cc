@@ -144,6 +144,7 @@ Status DBImpl::PromoteL0(ColumnFamilyHandle* column_family, int target_level) {
                    f->file_checksum_func_name, f->unique_id,
                    f->compensated_range_deletion_size, f->tail_size,
                    f->user_defined_timestamps_persisted);
+      edit.SetOldestTombstoneTimeOfLastFile(f->oldest_tombstone_time);
     }
 
     status = versions_->LogAndApply(cfd, *cfd->GetLatestMutableCFOptions(),

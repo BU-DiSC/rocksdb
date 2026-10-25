@@ -94,6 +94,9 @@ enum NewFileCustomTag : uint32_t {
   kCompensatedRangeDeletionSize = 14,
   kTailSize = 15,
   kUserDefinedTimestampsPersisted = 16,
+  // FADE: write time of the oldest tombstone in the file. Numbered away from
+  // the upstream sequence to avoid colliding with future upstream tags.
+  kOldestTombstoneTime = 40,
 
   // If this bit for the custom tag is set, opening DB should fail if
   // we don't know this field.
@@ -258,6 +261,15 @@ struct FileMetaData {
   // false, it's explicitly written to Manifest.
   bool user_defined_timestamps_persisted = true;
 
+  // FADE: sequence number of the oldest point or range tombstone in the file,
+  // or kMaxSequenceNumber if it has none. Only valid while the file is being
+  // built; not persisted.
+  SequenceNumber oldest_tombstone_seqno = kMaxSequenceNumber;
+
+  // FADE: unix time (seconds) at which the oldest tombstone in the file was
+  // written. 0 if the file has no tombstones or the time is unknown.
+  uint64_t oldest_tombstone_time = 0;
+
   FileMetaData() = default;
 
   FileMetaData(uint64_t file, uint32_t file_path_id, uint64_t file_size,
@@ -302,6 +314,7 @@ struct FileMetaData {
     if (smallest.size() == 0 || icmp.Compare(start, smallest) < 0) {
       smallest = start;
     }
+    oldest_tombstone_seqno = std::min(oldest_tombstone_seqno, seqno);
     if (largest.size() == 0 || icmp.Compare(largest, end) < 0) {
       largest = end;
     }
@@ -496,6 +509,13 @@ class VersionEdit {
     if (!HasLastSequence() || largest_seqno > GetLastSequence()) {
       SetLastSequence(largest_seqno);
     }
+  }
+
+  // Sets the FADE oldest tombstone time of the file most recently added with
+  // AddFile(). Used by call sites that add files field by field.
+  void SetOldestTombstoneTimeOfLastFile(uint64_t oldest_tombstone_time) {
+    assert(!new_files_.empty());
+    new_files_.back().second.oldest_tombstone_time = oldest_tombstone_time;
   }
 
   void AddFile(int level, const FileMetaData& f) {

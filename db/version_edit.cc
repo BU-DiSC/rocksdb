@@ -55,6 +55,10 @@ Status FileMetaData::UpdateBoundaries(const Slice& key, const Slice& value,
   largest.DecodeFrom(key);
   fd.smallest_seqno = std::min(fd.smallest_seqno, seqno);
   fd.largest_seqno = std::max(fd.largest_seqno, seqno);
+  if (value_type == kTypeDeletion || value_type == kTypeSingleDeletion ||
+      value_type == kTypeDeletionWithTimestamp) {
+    oldest_tombstone_seqno = std::min(oldest_tombstone_seqno, seqno);
+  }
 
   return Status::OK();
 }
@@ -255,6 +259,12 @@ bool VersionEdit::EncodeTo(std::string* dst,
       char p = static_cast<char>(0);
       PutLengthPrefixedSlice(dst, Slice(&p, 1));
     }
+    if (f.oldest_tombstone_time != 0) {
+      PutVarint32(dst, NewFileCustomTag::kOldestTombstoneTime);
+      std::string varint_oldest_tombstone_time;
+      PutVarint64(&varint_oldest_tombstone_time, f.oldest_tombstone_time);
+      PutLengthPrefixedSlice(dst, Slice(varint_oldest_tombstone_time));
+    }
     TEST_SYNC_POINT_CALLBACK("VersionEdit::EncodeTo:NewFile4:CustomizeFields",
                              dst);
 
@@ -451,6 +461,11 @@ const char* VersionEdit::DecodeNewFile4From(Slice* input) {
             return "user-defined timestamps persisted field wrong size";
           }
           f.user_defined_timestamps_persisted = (field[0] == 1);
+          break;
+        case kOldestTombstoneTime:
+          if (!GetVarint64(&field, &f.oldest_tombstone_time)) {
+            return "invalid oldest tombstone time";
+          }
           break;
         default:
           if ((custom_tag & kCustomTagNonSafeIgnoreMask) != 0) {
@@ -898,6 +913,10 @@ std::string VersionEdit::DebugString(bool hex_key) const {
     AppendNumberTo(&r, f.oldest_ancester_time);
     r.append(" file_creation_time:");
     AppendNumberTo(&r, f.file_creation_time);
+    if (f.oldest_tombstone_time != 0) {
+      r.append(" oldest_tombstone_time:");
+      AppendNumberTo(&r, f.oldest_tombstone_time);
+    }
     r.append(" epoch_number:");
     AppendNumberTo(&r, f.epoch_number);
     r.append(" file_checksum:");
@@ -1023,6 +1042,9 @@ std::string VersionEdit::DebugJSON(int edit_num, bool hex_key) const {
       jw << "LargestIKey" << f.largest.DebugString(hex_key);
       jw << "OldestAncesterTime" << f.oldest_ancester_time;
       jw << "FileCreationTime" << f.file_creation_time;
+      if (f.oldest_tombstone_time != 0) {
+        jw << "OldestTombstoneTime" << f.oldest_tombstone_time;
+      }
       jw << "EpochNumber" << f.epoch_number;
       jw << "FileChecksum" << Slice(f.file_checksum).ToString(true);
       jw << "FileChecksumFuncName" << f.file_checksum_func_name;

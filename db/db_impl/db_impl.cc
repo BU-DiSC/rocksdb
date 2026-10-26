@@ -1143,11 +1143,16 @@ void DBImpl::SelectColumnFamiliesPinningOldWal(
     oldest_alive_log = oldest.number;
     create_time = oldest.create_time;
     start_seqno = oldest.start_seqno;
+    if (alive_log_files_.size() == 1) {
+      // The current WAL; SwitchMemtable has not folded in its tombstones.
+      create_time = std::min(create_time, oldest_wal_tombstone_write_time_.load(
+                                              std::memory_order_relaxed));
+    }
   }
-  // A value in the WAL lives as long as the WAL. A tombstone written after the
-  // WAL was created expires no earlier than `dpt` after that, so releasing
-  // the WAL by then is enough. A WAL found at recovery has no creation time,
-  // so it is released right away.
+  // A value in the WAL lives as long as the WAL. A tombstone in the WAL
+  // expires no earlier than `dpt` after create_time, so releasing the WAL by
+  // then is enough. A WAL found at recovery has no creation time, so it is
+  // released right away.
   if (current_time <= create_time || current_time - create_time <= dpt) {
     return;
   }

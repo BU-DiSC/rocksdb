@@ -17,6 +17,7 @@
 #include "db/db_iter.h"
 #include "db/dbformat.h"
 #include "db/event_helpers.h"
+#include "db/fade.h"
 #include "db/log_reader.h"
 #include "db/log_writer.h"
 #include "db/memtable.h"
@@ -1058,6 +1059,14 @@ Status FlushJob::WriteLevel0Table() {
     // insert files directly into higher levels because some other
     // threads could be concurrently producing compacted files for
     // that key range.
+    // The memtables know when their first tombstone was added, or that it was
+    // replayed from the WAL, which the seqno-to-time mapping may not.
+    if (meta_.oldest_tombstone_seqno != kMaxSequenceNumber) {
+      for (const MemTable* m : mems_) {
+        meta_.oldest_tombstone_time = EarlierTombstoneTime(
+            meta_.oldest_tombstone_time, m->ApproximateOldestTombstoneTime());
+      }
+    }
     // Add file to L0
     edit_->AddFile(0 /* level */, meta_.fd.GetNumber(), meta_.fd.GetPathId(),
                    meta_.fd.GetFileSize(), meta_.smallest, meta_.largest,

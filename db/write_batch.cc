@@ -51,6 +51,7 @@
 #include "db/column_family.h"
 #include "db/db_impl/db_impl.h"
 #include "db/dbformat.h"
+#include "db/fade.h"
 #include "db/flush_scheduler.h"
 #include "db/kv_checksum.h"
 #include "db/memtable.h"
@@ -1802,6 +1803,18 @@ Status WriteBatch::PutDeletePersistenceThreshold(uint64_t seconds,
   return PutLogData(DeletePersistenceThresholdLogData(seconds, write_time));
 }
 
+bool WriteBatchInternal::MayHaveDeletePersistenceThreshold(
+    const WriteBatch& b) {
+  // A false positive only costs a redundant reset marker.
+  const std::string& rep = b.rep_;
+  return rep.find(kDeletePersistenceMarker, WriteBatchInternal::kHeader,
+                  kDeletePersistenceMarkerLen) != std::string::npos;
+}
+
+Status WriteBatchInternal::PutDeletePersistenceThresholdReset(WriteBatch* b) {
+  return b->PutLogData(WriteBatch::DeletePersistenceThresholdLogData(0, 0));
+}
+
 Status WriteBatch::PutDeletePersistenceThreshold(uint64_t seconds) {
   int64_t now = 0;
   Status s = SystemClock::Default()->GetCurrentTime(&now);
@@ -2177,7 +2190,8 @@ class MemTableInserter : public WriteBatch::Handler {
   }
 
   // A delete persistence threshold applies until the end of its batch. Call
-  // before iterating each batch when one inserter iterates several.
+  // before iterating each batch when one inserter iterates several. The
+  // inserter also calls it at the 2PC markers that separate batches.
   void ResetDeletePersistenceThreshold() {
     delete_dpt_ = 0;
     delete_dpt_write_time_ = 0;
@@ -2491,7 +2505,7 @@ class MemTableInserter : public WriteBatch::Handler {
     uint64_t dpt = 0;
     uint64_t write_time = 0;
     if (!WriteBatchInternal::ParseDeletePersistenceThreshold(blob, &dpt,
-                                                             &write_time)) {
+                                                            &write_time)) {
       return;
     }
     delete_dpt_ = dpt;
@@ -2517,10 +2531,16 @@ class MemTableInserter : public WriteBatch::Handler {
       const bool kBatchBoundary = true;
       MaybeAdvanceSeq(kBatchBoundary);
     } else if (ret_status.ok()) {
+      if (recovering_log_number_ != 0) {
+        mem->LowerOldestTombstoneTime(kUnknownTombstoneTime);
+      }
       if (delete_dpt_ > 0) {
         mem->RecordTombstoneDpt(sequence_, delete_dpt_, delete_dpt_write_time_);
         if (db_ != nullptr) {
           db_->NoteExplicitDeletePersistenceThreshold(delete_dpt_);
+          if (recovering_log_number_ == 0) {
+            db_->NoteTombstoneWriteTime(delete_dpt_write_time_);
+          }
         }
       }
       MaybeAdvanceSeq();
@@ -3006,6 +3026,9 @@ class MemTableInserter : public WriteBatch::Handler {
   Status MarkBeginPrepare(bool unprepare) override {
     assert(rebuilding_trx_ == nullptr);
     assert(db_);
+    // A prepared section is a batch of its own, so markers before it do not
+    // apply to it.
+    ResetDeletePersistenceThreshold();
 
     if (recovering_log_number_ != 0) {
       db_->mutex()->AssertHeld();
@@ -3054,6 +3077,7 @@ class MemTableInserter : public WriteBatch::Handler {
       assert(rebuilding_trx_ == nullptr);
     }
     const bool batch_boundry = true;
+    ResetDeletePersistenceThreshold();
     MaybeAdvanceSeq(batch_boundry);
 
     return Status::OK();
@@ -3070,6 +3094,7 @@ class MemTableInserter : public WriteBatch::Handler {
       // a batch. This happens when write batch commits skipping the prepare
       // phase.
       const bool batch_boundry = true;
+      ResetDeletePersistenceThreshold();
       MaybeAdvanceSeq(batch_boundry);
     }
     return Status::OK();
@@ -3103,12 +3128,8 @@ class MemTableInserter : public WriteBatch::Handler {
           log_number_ref_ = batch_info.log_number_;
           ResetProtectionInfo();
           // The recovered batch carries its own markers.
-          const uint64_t saved_dpt = delete_dpt_;
-          const uint64_t saved_dpt_write_time = delete_dpt_write_time_;
           ResetDeletePersistenceThreshold();
           s = batch_info.batch_->Iterate(this);
-          delete_dpt_ = saved_dpt;
-          delete_dpt_write_time_ = saved_dpt_write_time;
           log_number_ref_ = 0;
         }
         // else the values are already inserted before the commit
@@ -3127,6 +3148,7 @@ class MemTableInserter : public WriteBatch::Handler {
       assert(!write_after_commit_ || log_number_ref_ > 0);
     }
     const bool batch_boundry = true;
+    ResetDeletePersistenceThreshold();
     MaybeAdvanceSeq(batch_boundry);
 
     if (UNLIKELY(s.IsTryAgain())) {
@@ -3178,6 +3200,8 @@ class MemTableInserter : public WriteBatch::Handler {
               });
           if (s.ok()) {
             ResetProtectionInfo();
+            // The recovered batch carries its own markers.
+            ResetDeletePersistenceThreshold();
             s = batch_info.batch_->Iterate(this);
             log_number_ref_ = 0;
           }
@@ -3198,6 +3222,7 @@ class MemTableInserter : public WriteBatch::Handler {
       assert(!write_after_commit_ || log_number_ref_ > 0);
     }
     constexpr bool batch_boundary = true;
+    ResetDeletePersistenceThreshold();
     MaybeAdvanceSeq(batch_boundary);
 
     if (UNLIKELY(s.IsTryAgain())) {
@@ -3224,6 +3249,7 @@ class MemTableInserter : public WriteBatch::Handler {
     }
 
     const bool batch_boundry = true;
+    ResetDeletePersistenceThreshold();
     MaybeAdvanceSeq(batch_boundry);
 
     return Status::OK();

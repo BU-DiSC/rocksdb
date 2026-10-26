@@ -529,6 +529,10 @@ class MemTable {
     return oldest_tombstone_time_.load(std::memory_order_relaxed);
   }
 
+  // Makes ApproximateOldestTombstoneTime() at most `time`, for tombstones
+  // written earlier than they were added, such as those replayed from the WAL.
+  void LowerOldestTombstoneTime(uint64_t time);
+
   // Sequence number of the newest tombstone (point or range), 0 if none.
   SequenceNumber NewestTombstoneSeqno() const {
     return newest_tombstone_seqno_.load(std::memory_order_relaxed);

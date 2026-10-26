@@ -140,6 +140,14 @@ class LevelCompactionBuilder {
       const autovector<std::pair<int, FileMetaData*>>& level_files,
       CompactToNextLevel compact_to_next_level);
 
+  // Picks the first file with expired tombstones whose compaction into the
+  // next level is not blocked by a running compaction.
+  void PickFileWithExpiredTombstones();
+
+  // Returns true if no running compaction holds files in output_level_ that
+  // overlap start_level_inputs_.
+  bool OutputLevelIsFree();
+
   const std::string& cf_name_;
   VersionStorageInfo* vstorage_;
   CompactionPicker* compaction_picker_;
@@ -204,13 +212,45 @@ void LevelCompactionBuilder::PickFileToCompact(
   start_level_inputs_.files.clear();
 }
 
+void LevelCompactionBuilder::PickFileWithExpiredTombstones() {
+  // A blocked file must not keep the others, or the size-based picks, from
+  // being compacted.
+  for (const auto& level_file : vstorage_->FilesWithExpiredTombstones()) {
+    autovector<std::pair<int, FileMetaData*>> candidate;
+    candidate.push_back(level_file);
+    PickFileToCompact(candidate, CompactToNextLevel::kAlways);
+    if (!start_level_inputs_.empty() && OutputLevelIsFree()) {
+      return;
+    }
+    start_level_inputs_.clear();
+  }
+}
+
+bool LevelCompactionBuilder::OutputLevelIsFree() {
+  if (compaction_picker_->FilesRangeOverlapWithCompaction(
+          {start_level_inputs_}, output_level_,
+          Compaction::EvaluatePenultimateLevel(vstorage_, ioptions_,
+                                               start_level_, output_level_))) {
+    return false;
+  }
+  InternalKey smallest, largest;
+  compaction_picker_->GetRange(start_level_inputs_, &smallest, &largest);
+  CompactionInputFiles output_level_inputs;
+  output_level_inputs.level = output_level_;
+  vstorage_->GetOverlappingInputs(output_level_, &smallest, &largest,
+                                  &output_level_inputs.files);
+  // ExpandInputsToCleanCut fails if any overlapping file is being compacted.
+  return output_level_inputs.empty() ||
+         compaction_picker_->ExpandInputsToCleanCut(cf_name_, vstorage_,
+                                                    &output_level_inputs);
+}
+
 void LevelCompactionBuilder::SetupInitialFiles() {
   // FADE: expired tombstones take priority over level saturation, so that
   // deletes persist within delete_persistence_threshold. The list never
   // includes the last non-empty level, so the next level always exists.
   parent_index_ = base_index_ = -1;
-  PickFileToCompact(vstorage_->FilesWithExpiredTombstones(),
-                    CompactToNextLevel::kAlways);
+  PickFileWithExpiredTombstones();
   if (!start_level_inputs_.empty()) {
     compaction_reason_ = CompactionReason::kDeletePersistence;
     return;

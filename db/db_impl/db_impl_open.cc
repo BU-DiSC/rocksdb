@@ -11,6 +11,7 @@
 #include "db/builder.h"
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
+#include "db/fade.h"
 #include "db/periodic_task_scheduler.h"
 #include "env/composite_env_wrapper.h"
 #include "file/filename.h"
@@ -1782,6 +1783,12 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
   constexpr int level = 0;
 
   if (s.ok() && has_output) {
+    // Tombstones replayed from the WAL have an unknown write time; the
+    // memtable dates them so they expire at once.
+    if (meta.oldest_tombstone_seqno != kMaxSequenceNumber) {
+      meta.oldest_tombstone_time = EarlierTombstoneTime(
+          meta.oldest_tombstone_time, mem->ApproximateOldestTombstoneTime());
+    }
     edit->AddFile(level, meta.fd.GetNumber(), meta.fd.GetPathId(),
                   meta.fd.GetFileSize(), meta.smallest, meta.largest,
                   meta.fd.smallest_seqno, meta.fd.largest_seqno,
@@ -2105,6 +2112,8 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
     if (s.ok()) {
       impl->alive_log_files_.emplace_back(impl->logfile_number_);
       impl->alive_log_files_.back().create_time = impl->WalCreateTime();
+      impl->oldest_wal_tombstone_write_time_.store(kNoExplicitDpt,
+                                                   std::memory_order_relaxed);
       impl->alive_log_files_.back().start_seqno =
           impl->versions_->LastSequence();
       // In WritePrepared there could be gap in sequence numbers. This breaks

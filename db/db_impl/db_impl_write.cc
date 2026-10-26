@@ -1352,6 +1352,13 @@ Status DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
       if (!writer->CallbackFailed()) {
         Status s = WriteBatchInternal::Append(*merged_batch, writer->batch,
                                               /*WAL_only*/ true);
+        if (s.ok() && WriteBatchInternal::MayHaveDeletePersistenceThreshold(
+                          *writer->batch)) {
+          // On WAL replay, the merged batch is applied as one batch; keep the
+          // writer's marker from applying to the next writer's deletes.
+          s = WriteBatchInternal::PutDeletePersistenceThresholdReset(
+              *merged_batch);
+        }
         if (!s.ok()) {
           tmp_batch->Clear();
           return s;
@@ -2317,6 +2324,16 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
       log_empty_ = true;
       log_dir_synced_ = false;
       logs_.emplace_back(logfile_number_, new_log);
+      // No memtable write is in flight here, so the tombstones noted since
+      // the last switch are all in the WAL being closed.
+      const uint64_t oldest_tombstone_write_time =
+          oldest_wal_tombstone_write_time_.exchange(kNoExplicitDpt,
+                                                    std::memory_order_relaxed);
+      if (!alive_log_files_.empty()) {
+        uint64_t& prev_create_time = alive_log_files_.back().create_time;
+        prev_create_time =
+            std::min(prev_create_time, oldest_tombstone_write_time);
+      }
       alive_log_files_.emplace_back(logfile_number_);
       alive_log_files_.back().create_time = WalCreateTime();
       alive_log_files_.back().start_seqno = versions_->LastSequence();

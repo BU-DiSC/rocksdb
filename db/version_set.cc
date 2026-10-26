@@ -3737,8 +3737,19 @@ void VersionStorageInfo::ComputeFilesWithExpiredTombstones(
       if (f->being_compacted) {
         continue;
       }
+      uint64_t oldest_tombstone_time = f->oldest_tombstone_time;
+      if (oldest_tombstone_time == 0 &&
+          (f->num_deletions > 0 || f->num_range_deletions > 0)) {
+        // Files that were ingested, imported, repaired or written before
+        // tombstone times were recorded: date their tombstones by the file.
+        oldest_tombstone_time = EarlierTombstoneTime(f->oldest_ancester_time,
+                                                     f->file_creation_time);
+        if (oldest_tombstone_time == 0) {
+          oldest_tombstone_time = kUnknownTombstoneTime;
+        }
+      }
       const uint64_t expiry =
-          FadeExpiryTime(f->oldest_tombstone_time, cf_dpt, f->tombstone_dpts,
+          FadeExpiryTime(oldest_tombstone_time, cf_dpt, f->tombstone_dpts,
                          fractions[tree_level]);
       next_fade_expiry_time_ = std::min(next_fade_expiry_time_, expiry);
       if (current_time > expiry) {

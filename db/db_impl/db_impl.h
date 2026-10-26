@@ -1280,6 +1280,17 @@ class DBImpl : public DB {
     }
   }
 
+  // Notes that a tombstone in the current WAL was given the write time
+  // `write_time`, which can be earlier than the WAL's creation.
+  void NoteTombstoneWriteTime(uint64_t write_time) {
+    uint64_t seen =
+        oldest_wal_tombstone_write_time_.load(std::memory_order_relaxed);
+    while (write_time < seen &&
+           !oldest_wal_tombstone_write_time_.compare_exchange_weak(
+               seen, write_time, std::memory_order_relaxed)) {
+    }
+  }
+
   bool ExplicitDptSeen() const {
     return min_explicit_dpt_.load(std::memory_order_relaxed) != kNoExplicitDpt;
   }
@@ -1758,8 +1769,9 @@ class DBImpl : public DB {
     uint64_t number;
     uint64_t size = 0;
     bool getting_flushed = false;
-    // When the WAL was created, in seconds since the epoch. 0 if unknown, as
-    // for WALs found at recovery.
+    // When the WAL was created, in seconds since the epoch, lowered to the
+    // write time of any tombstone in it that is earlier. 0 if unknown, as for
+    // WALs found at recovery.
     uint64_t create_time = 0;
     // The last sequence number before the WAL was created. Writes to the WAL
     // have larger sequence numbers.
@@ -2617,6 +2629,9 @@ class DBImpl : public DB {
   static constexpr uint64_t kNoExplicitDpt =
       std::numeric_limits<uint64_t>::max();
   std::atomic<uint64_t> min_explicit_dpt_{kNoExplicitDpt};
+  // The earliest write time noted by NoteTombstoneWriteTime since the current
+  // WAL was created, or kNoExplicitDpt if none.
+  std::atomic<uint64_t> oldest_wal_tombstone_write_time_{kNoExplicitDpt};
   // Sequence number of the newest tombstone in a memtable that is no longer
   // mutable, 0 if none. Guarded by mutex_.
   SequenceNumber newest_switched_tombstone_seqno_ = 0;

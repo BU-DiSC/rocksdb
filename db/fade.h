@@ -113,6 +113,21 @@ inline uint64_t FadeExpiryTime(uint64_t oldest_tombstone_time, uint64_t cf_dpt,
   return expiry;
 }
 
+// Write time given to tombstones whose actual write time is unknown, such as
+// those replayed from the WAL: the earliest possible, so they expire at once.
+constexpr uint64_t kUnknownTombstoneTime = 1;
+
+// Returns the earlier of two tombstone times, where 0 means none.
+inline uint64_t EarlierTombstoneTime(uint64_t a, uint64_t b) {
+  if (a == 0) {
+    return b;
+  }
+  if (b == 0) {
+    return a;
+  }
+  return std::min(a, b);
+}
+
 // Estimates the write time of the tombstone with sequence number `seqno`.
 // The seqno-to-time mapping yields a time no later than the actual write,
 // so the estimate errs towards expiring early. Returns 0 when there is no

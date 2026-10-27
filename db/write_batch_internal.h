@@ -150,6 +150,11 @@ class WriteBatchInternal {
                                               uint64_t* seconds,
                                               uint64_t* write_time);
 
+  // Sets the write time of the delete persistence threshold markers in `b`
+  // that have none.
+  static void SetDeletePersistenceThresholdWriteTimes(WriteBatch* b,
+                                                      uint64_t write_time);
+
   // Returns true if `b` may hold a delete persistence threshold marker.
   static bool MayHaveDeletePersistenceThreshold(const WriteBatch& b);
 

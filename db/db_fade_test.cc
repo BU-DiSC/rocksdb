@@ -615,6 +615,42 @@ TEST_F(DBFadeTest, MarkerSurvivesWalReplay) {
   ASSERT_EQ(AllDpts(db_).entries(), expected);
 }
 
+// A marker without a write time is dated when the batch is written, not when
+// it was built, and keeps that date through WAL replay.
+TEST_F(DBFadeTest, MarkerWithoutWriteTimeIsDatedAtWrite) {
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  options.avoid_flush_during_recovery = true;
+  DestroyAndReopen(options);
+  const SequenceNumber first = db_->GetLatestSequenceNumber() + 1;
+
+  WriteBatch batch;
+  ASSERT_OK(batch.PutDeletePersistenceThreshold(100));
+  ASSERT_OK(batch.Delete("a"));
+  Sleep(5 * kCadence);
+  const uint64_t write_time = Now();
+  ASSERT_OK(db_->Write(WriteOptions(), &batch));
+
+  std::vector<TombstoneDpt> expected = {{first, first, 100, write_time}};
+  ASSERT_EQ(AllDpts(db_).entries(), expected);
+  Sleep(5 * kCadence);
+  Reopen(options);
+  ASSERT_EQ(AllDpts(db_).entries(), expected);
+}
+
+// Markers from before the write time was fixed width still parse.
+TEST_F(DBFadeTest, ParsesVarintWriteTime) {
+  std::string blob = WriteBatch::DeletePersistenceThresholdLogData(100, 0);
+  blob.resize(blob.size() - sizeof(uint64_t));
+  PutVarint64(&blob, 12345);
+  uint64_t seconds = 0;
+  uint64_t write_time = 0;
+  ASSERT_TRUE(WriteBatchInternal::ParseDeletePersistenceThreshold(
+      blob, &seconds, &write_time));
+  ASSERT_EQ(seconds, 100u);
+  ASSERT_EQ(write_time, 12345u);
+}
+
 class DBFadeWriteGroupTest
     : public DBFadeTest,
       public testing::WithParamInterface<std::tuple<bool, bool>> {};
@@ -718,6 +754,78 @@ TEST_P(DBFadeTwoPhaseTest, MarkerSurvivesRecovery) {
   std::string value;
   ASSERT_TRUE(txn_db->Get(ReadOptions(), "b", &value).IsNotFound());
   ASSERT_OK(txn_db->Get(ReadOptions(), "a", &value));
+}
+
+// A transaction's marker without a write time is dated when the transaction
+// is prepared, not when its deletes were buffered, and keeps that date
+// through commit and recovery.
+TEST_P(DBFadeTwoPhaseTest, MarkerWithoutWriteTimeIsDatedAtPrepare) {
+  const TxnDBWritePolicy policy = std::get<0>(GetParam());
+  const bool commit_before_crash = std::get<1>(GetParam());
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  DestroyAndReopen(options);
+  Close();
+  TransactionDBOptions txn_db_options;
+  txn_db_options.write_policy = policy;
+  TransactionDB* txn_db = nullptr;
+  ASSERT_OK(TransactionDB::Open(options, txn_db_options, dbname_, &txn_db));
+  std::unique_ptr<TransactionDB> txn_db_guard(txn_db);
+
+  WriteOptions write_options;
+  write_options.sync = true;
+  Transaction* txn = txn_db->BeginTransaction(write_options);
+  ASSERT_OK(txn->SetName("t"));
+  txn->PutLogData(WriteBatch::DeletePersistenceThresholdLogData(100, 0));
+  ASSERT_OK(txn->Delete("b"));
+  mock_clock_->MockSleepForSeconds(5 * kCadence);
+  const uint64_t prepare_time = Now();
+  ASSERT_OK(txn->Prepare());
+  mock_clock_->MockSleepForSeconds(5 * kCadence);
+  if (commit_before_crash) {
+    ASSERT_OK(txn->Commit());
+  }
+  delete txn;
+  static_cast<PessimisticTransactionDB*>(txn_db)->TEST_Crash();
+  txn_db_guard.reset();
+
+  ASSERT_OK(TransactionDB::Open(options, txn_db_options, dbname_, &txn_db));
+  txn_db_guard.reset(txn_db);
+  if (!commit_before_crash) {
+    txn = txn_db->GetTransactionByName("t");
+    ASSERT_NE(txn, nullptr);
+    ASSERT_OK(txn->Commit());
+    delete txn;
+  }
+  const auto entries = AllDpts(txn_db).entries();
+  ASSERT_EQ(entries.size(), 1u);
+  ASSERT_EQ(entries[0].dpt, 100u);
+  ASSERT_EQ(entries[0].write_time, prepare_time);
+}
+
+// Without two-phase commit, the marker is dated at commit.
+TEST_F(DBFadeTest, MarkerWithoutWriteTimeIsDatedAtCommit) {
+  Options options = FadeOptions();
+  options.delete_persistence_threshold = 0;
+  DestroyAndReopen(options);
+  Close();
+  TransactionDB* txn_db = nullptr;
+  ASSERT_OK(TransactionDB::Open(options, TransactionDBOptions(), dbname_,
+                                &txn_db));
+  std::unique_ptr<TransactionDB> txn_db_guard(txn_db);
+
+  Transaction* txn = txn_db->BeginTransaction(WriteOptions());
+  txn->PutLogData(WriteBatch::DeletePersistenceThresholdLogData(100, 0));
+  ASSERT_OK(txn->Delete("b"));
+  mock_clock_->MockSleepForSeconds(5 * kCadence);
+  const uint64_t commit_time = Now();
+  ASSERT_OK(txn->Commit());
+  delete txn;
+
+  const auto entries = AllDpts(txn_db).entries();
+  ASSERT_EQ(entries.size(), 1u);
+  ASSERT_EQ(entries[0].dpt, 100u);
+  ASSERT_EQ(entries[0].write_time, commit_time);
 }
 
 INSTANTIATE_TEST_CASE_P(DBFadeTwoPhaseTest, DBFadeTwoPhaseTest,

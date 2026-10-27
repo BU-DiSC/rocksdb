@@ -1790,11 +1790,12 @@ constexpr size_t kDeletePersistenceMarkerLen =
     sizeof(kDeletePersistenceMarker) - 1;
 }  // namespace
 
-std::string WriteBatch::DeletePersistenceThresholdLogData(
-    uint64_t seconds, uint64_t write_time) {
+std::string WriteBatch::DeletePersistenceThresholdLogData(uint64_t seconds,
+                                                          uint64_t write_time) {
   std::string blob(kDeletePersistenceMarker, kDeletePersistenceMarkerLen);
   PutVarint64(&blob, seconds);
-  PutVarint64(&blob, write_time);
+  // Fixed width, so that the DB can set a zero write time in place.
+  PutFixed64(&blob, write_time);
   return blob;
 }
 
@@ -1816,24 +1817,59 @@ Status WriteBatchInternal::PutDeletePersistenceThresholdReset(WriteBatch* b) {
 }
 
 Status WriteBatch::PutDeletePersistenceThreshold(uint64_t seconds) {
-  int64_t now = 0;
-  Status s = SystemClock::Default()->GetCurrentTime(&now);
-  if (!s.ok()) {
-    return s;
-  }
-  return PutDeletePersistenceThreshold(seconds, static_cast<uint64_t>(now));
+  return PutDeletePersistenceThreshold(seconds, 0);
 }
 
-bool WriteBatchInternal::ParseDeletePersistenceThreshold(
-    const Slice& blob, uint64_t* seconds, uint64_t* write_time) {
+void WriteBatchInternal::SetDeletePersistenceThresholdWriteTimes(
+    WriteBatch* b, uint64_t write_time) {
+  Slice input(b->rep_);
+  input.remove_prefix(WriteBatchInternal::kHeader);
+  char tag = 0;
+  uint32_t column_family = 0;
+  Slice key, value, blob, xid;
+  uint64_t unix_write_time = 0;
+  while (!input.empty()) {
+    if (!ReadRecordFromWriteBatch(&input, &tag, &column_family, &key, &value,
+                                  &blob, &xid, &unix_write_time)
+             .ok()) {
+      return;
+    }
+    uint64_t seconds = 0;
+    uint64_t marker_write_time = 0;
+    if (tag != kTypeLogData ||
+        !ParseDeletePersistenceThreshold(blob, &seconds, &marker_write_time) ||
+        marker_write_time != 0) {
+      continue;
+    }
+    // The write time is the last 8 bytes of the blob, which points into rep_.
+    // An earlier varint marker ends in fewer zero bytes and is left alone.
+    const size_t offset =
+        blob.data() + blob.size() - sizeof(uint64_t) - b->rep_.data();
+    if (DecodeFixed64(b->rep_.data() + offset) != 0) {
+      continue;
+    }
+    EncodeFixed64(&b->rep_[offset], write_time);
+  }
+}
+
+bool WriteBatchInternal::ParseDeletePersistenceThreshold(const Slice& blob,
+                                                         uint64_t* seconds,
+                                                         uint64_t* write_time) {
   Slice input = blob;
   if (!input.starts_with(
           Slice(kDeletePersistenceMarker, kDeletePersistenceMarkerLen))) {
     return false;
   }
   input.remove_prefix(kDeletePersistenceMarkerLen);
-  return GetVarint64(&input, seconds) && GetVarint64(&input, write_time) &&
-         input.empty();
+  if (!GetVarint64(&input, seconds)) {
+    return false;
+  }
+  // Earlier markers held the write time as a varint, which takes 8 bytes only
+  // for times past the year 10 million.
+  if (input.size() == sizeof(uint64_t)) {
+    return GetFixed64(&input, write_time);
+  }
+  return GetVarint64(&input, write_time) && input.empty();
 }
 
 void WriteBatch::SetSavePoint() {
@@ -2505,11 +2541,14 @@ class MemTableInserter : public WriteBatch::Handler {
     uint64_t dpt = 0;
     uint64_t write_time = 0;
     if (!WriteBatchInternal::ParseDeletePersistenceThreshold(blob, &dpt,
-                                                            &write_time)) {
+                                                             &write_time)) {
       return;
     }
     delete_dpt_ = dpt;
-    delete_dpt_write_time_ = write_time;
+    // A marker the DB did not date, such as one inserted without a write,
+    // counts as old.
+    delete_dpt_write_time_ =
+        write_time == 0 ? kUnknownTombstoneTime : write_time;
     if (UNLIKELY(rebuilding_trx_ != nullptr)) {
       // Keep the threshold for the deletions of the recovered transaction.
       // Only the markers are kept; other LogData does not reach the memtable.

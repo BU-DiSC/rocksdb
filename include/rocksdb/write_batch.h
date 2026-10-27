@@ -215,10 +215,17 @@ class WriteBatch : public WriteBatchBase {
   // value and the column family's delete_persistence_threshold. Zero clears
   // the threshold for the deletions that follow.
   //
+  // A zero `write_time` is set by the DB when the batch is submitted for
+  // writing, on the clock of the DB's Env. For a transaction this is its
+  // commit, or its prepare under two-phase commit, so the threshold counts
+  // from when the deletions are written rather than from when they were
+  // buffered. Under the write-unprepared policy, deletions flushed before
+  // prepare are dated at that flush.
+  //
   // The threshold is stored as LogData, so it does not consume a sequence
   // number and survives WAL replay with its original write time.
   Status PutDeletePersistenceThreshold(uint64_t seconds, uint64_t write_time);
-  // As above, with the write time read from SystemClock::Default().
+  // As above, with the write time set by the DB.
   Status PutDeletePersistenceThreshold(uint64_t seconds);
 
   // The LogData blob written by PutDeletePersistenceThreshold, for callers

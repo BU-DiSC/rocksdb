@@ -301,6 +301,20 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     }
   }
 
+  // Markers without a write time count from now, when their deletes are
+  // written, rather than from when the batch was built. For a transaction this
+  // is its commit, or its prepare under two-phase commit. Stamped after the
+  // checks above, so that a rejected batch stays unstamped for a retry.
+  if (WriteBatchInternal::MayHaveDeletePersistenceThreshold(*my_batch)) {
+    int64_t now = 0;
+    Status s = immutable_db_options_.clock->GetCurrentTime(&now);
+    if (!s.ok()) {
+      return s;
+    }
+    WriteBatchInternal::SetDeletePersistenceThresholdWriteTimes(
+        my_batch, static_cast<uint64_t>(now));
+  }
+
   if (two_write_queues_ && disable_memtable) {
     AssignOrder assign_order =
         seq_per_batch_ ? kDoAssignOrder : kDontAssignOrder;

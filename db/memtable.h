@@ -65,6 +65,8 @@ struct ImmutableMemTableOptions {
   bool allow_data_in_errors;
   bool paranoid_memory_checks;
   bool memtable_veirfy_per_key_checksum_on_seek;
+  int num_levels;
+  double max_bytes_for_level_multiplier;
 };
 
 // Batched counters to updated when inserting keys in one write batch.
@@ -584,6 +586,10 @@ class MemTable final : public ReadOnlyMemTable {
     table_->UniqueRandomSample(NumEntries(), target_sample_size, entries);
   }
 
+  bool HasExpiredTombstones(uint64_t current_time) const {
+    return min_expiration_time_.LoadRelaxed() < current_time;
+  }
+
   // This method heuristically determines if the memtable should continue to
   // host more data.
   bool ShouldScheduleFlush() const {
@@ -857,6 +863,7 @@ class MemTable final : public ReadOnlyMemTable {
   RelaxedAtomic<uint64_t> num_entries_;
   RelaxedAtomic<uint64_t> num_deletes_;
   RelaxedAtomic<uint64_t> num_range_deletes_;
+  RelaxedAtomic<uint64_t> min_expiration_time_;
 
   // Dynamically changeable memtable option
   RelaxedAtomic<size_t> write_buffer_size_;

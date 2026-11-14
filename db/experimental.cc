@@ -167,7 +167,8 @@ Status UpdateManifestForFilesState(
                   lf->file_checksum_func_name, lf->unique_id,
                   lf->compensated_range_deletion_size, lf->tail_size,
                   lf->user_defined_timestamps_persisted,
-                  lf->fd.expiration_time);
+                  lf->fd.expiration_time, lf->fd.shortest_partial_ttl,
+                  lf->fd.earliest_level_insertion_time);
             }
           }
         } else {

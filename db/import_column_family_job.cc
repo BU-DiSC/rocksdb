@@ -215,7 +215,8 @@ Status ImportColumnFamilyJob::Run() {
           tail_size,
           static_cast<bool>(
               f.table_properties.user_defined_timestamps_persisted),
-          f.fd.expiration_time);
+          f.fd.expiration_time, f.fd.shortest_partial_ttl,
+          f.fd.earliest_level_insertion_time);
       s = dummy_version_builder.Apply(&dummy_version_edit);
     }
     if (s.ok()) {

@@ -715,7 +715,8 @@ class Repairer {
             table->meta.file_checksum_func_name, table->meta.unique_id,
             table->meta.compensated_range_deletion_size, table->meta.tail_size,
             table->meta.user_defined_timestamps_persisted,
-            table->meta.fd.expiration_time);
+            table->meta.fd.expiration_time, table->meta.fd.shortest_partial_ttl,
+            table->meta.fd.earliest_level_insertion_time);
       }
       s = dummy_version_builder.Apply(&dummy_edit);
       if (s.ok()) {

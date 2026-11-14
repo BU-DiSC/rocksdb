@@ -36,6 +36,7 @@
 #include "rocksdb/file_system.h"
 #include "rocksdb/iterator.h"
 #include "rocksdb/options.h"
+#include "rocksdb/system_clock.h"
 #include "rocksdb/table.h"
 #include "seqno_to_time_mapping.h"
 #include "table/block_based/block_based_table_builder.h"
@@ -222,6 +223,8 @@ Status BuildTable(
                    "(FADE) BuildTable: levels = %d, size_ratio = %f", levels,
                    size_ratio);
     uint64_t min_expiration_time = std::numeric_limits<uint64_t>::max();
+    uint64_t min_level_insertion_time = std::numeric_limits<uint64_t>::max();
+    uint64_t min_partial_time = std::numeric_limits<uint64_t>::max();
     c_iter.SeekToFirst();
     for (; c_iter.Valid(); c_iter.Next()) {
       const Slice& key = c_iter.key();
@@ -254,9 +257,13 @@ Status BuildTable(
                          "key=%s, created_time=%lu, DPT=%lu",
                          ikey.user_key.data(), tombstone_time, tombstone_dpt);
         }
+        uint64_t level_insertion_time = GetILIT(tombstone_dpt,tombstone_time, tboptions.level_at_creation+1, levels+1, size_ratio);
+        uint64_t pttl = GetPTTL(tombstone_dpt, tboptions.level_at_creation+1, levels+1, size_ratio);
         min_expiration_time = std::min(
-            min_expiration_time,
-            tombstone_time + GetLevelDPT(tombstone_dpt, 0, levels, size_ratio));
+            min_expiration_time, level_insertion_time + pttl);
+        min_partial_time = std::min(
+                  min_partial_time, pttl);
+        min_level_insertion_time =std::min(min_level_insertion_time, level_insertion_time);
       }
 
       if (ikey.type == kTypeValuePreferredSeqno) {
@@ -323,7 +330,8 @@ Status BuildTable(
                      "(FADE) BuildTable: file expiration time = %lu",
                      min_expiration_time);
       meta->fd.expiration_time = min_expiration_time;
-
+      meta->fd.shortest_partial_ttl = min_partial_time;
+      meta->fd.earliest_level_insertion_time = min_level_insertion_time;
       auto range_del_it = range_del_agg->NewIterator();
       Slice last_tombstone_start_user_key{};
       for (range_del_it->SeekToFirst(); range_del_it->Valid();

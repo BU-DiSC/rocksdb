@@ -1298,6 +1298,8 @@ class DBImpl : public DB {
   // periodically.
   void TriggerPeriodicCompaction();
 
+  void FlushExpiredMemTables();
+
   // REQUIRES: DB mutex held
   std::pair<SequenceNumber, uint64_t> GetSeqnoToTimeSample() const;
 

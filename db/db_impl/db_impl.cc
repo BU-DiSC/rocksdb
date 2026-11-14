@@ -256,6 +256,9 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   periodic_task_functions_.emplace(
       PeriodicTaskType::kTriggerCompaction,
       [this]() { this->TriggerPeriodicCompaction(); });
+  periodic_task_functions_.emplace(
+      PeriodicTaskType::kFlushExpiredMemTables,
+      [this]() { this->FlushExpiredMemTables(); });
 
   versions_.reset(new VersionSet(
       dbname_, &immutable_db_options_, mutable_db_options_, file_options_,
@@ -816,6 +819,13 @@ Status DBImpl::StartPeriodicTaskScheduler() {
     s = periodic_task_scheduler_.Register(
         PeriodicTaskType::kTriggerCompaction,
         periodic_task_functions_.at(PeriodicTaskType::kTriggerCompaction),
+        /*run_immediately=*/false);
+  }
+
+  if (s.ok()) {
+    s = periodic_task_scheduler_.Register(
+        PeriodicTaskType::kFlushExpiredMemTables,
+        periodic_task_functions_.at(PeriodicTaskType::kFlushExpiredMemTables),
         /*run_immediately=*/false);
   }
 

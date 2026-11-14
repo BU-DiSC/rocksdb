@@ -35,6 +35,7 @@
 #include "rocksdb/iterator.h"
 #include "rocksdb/merge_operator.h"
 #include "rocksdb/slice_transform.h"
+#include "rocksdb/system_clock.h"
 #include "rocksdb/types.h"
 #include "rocksdb/write_buffer_manager.h"
 #include "table/internal_iterator.h"
@@ -42,6 +43,7 @@
 #include "table/merging_iterator.h"
 #include "util/autovector.h"
 #include "util/coding.h"
+#include "util/dpt_level.h"
 #include "util/mutexlock.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -72,7 +74,10 @@ ImmutableMemTableOptions::ImmutableMemTableOptions(
       allow_data_in_errors(ioptions.allow_data_in_errors),
       paranoid_memory_checks(mutable_cf_options.paranoid_memory_checks),
       memtable_veirfy_per_key_checksum_on_seek(
-          mutable_cf_options.memtable_veirfy_per_key_checksum_on_seek) {}
+          mutable_cf_options.memtable_veirfy_per_key_checksum_on_seek),
+      num_levels(ioptions.num_levels),
+      max_bytes_for_level_multiplier(
+          mutable_cf_options.max_bytes_for_level_multiplier) {}
 
 MemTable::MemTable(const InternalKeyComparator& cmp,
                    const ImmutableOptions& ioptions,
@@ -101,6 +106,7 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
       num_entries_(0),
       num_deletes_(0),
       num_range_deletes_(0),
+      min_expiration_time_(std::numeric_limits<uint64_t>::max()),
       write_buffer_size_(mutable_cf_options.write_buffer_size),
       first_seqno_(0),
       earliest_seqno_(latest_seq),
@@ -195,6 +201,14 @@ size_t MemTable::ApproximateMemoryUsage() {
 bool MemTable::ShouldFlushNow() {
   if (IsMarkedForFlush()) {
     // TODO: dedicated flush reason when marked for flush
+    return true;
+  }
+
+  int64_t current_time = 0;
+
+  Status s = clock_->GetCurrentTime(&current_time);
+
+  if (s.ok() && HasExpiredTombstones(static_cast<uint64_t>(current_time))) {
     return true;
   }
 
@@ -1045,7 +1059,6 @@ Status MemTable::Add(SequenceNumber s, ValueType type,
     // TODO(yuzhangyu): support updating newest UDT for when `allow_concurrent`
     // is true.
     MaybeUpdateNewestUDT(key_slice);
-    UpdateFlushState();
   } else {
     bool res = (hint == nullptr)
                    ? table->InsertKeyConcurrently(handle)
@@ -1082,6 +1095,24 @@ Status MemTable::Add(SequenceNumber s, ValueType type,
         !earliest_seqno_.compare_exchange_weak(cur_earliest_seqno, s)) {
     }
   }
+  if (type == kTypeDeletion && value.size() >= 2 * sizeof(uint64_t)) {
+    auto [unpacked_value, tombstone_time] =
+        ParsePackedValueWithWriteTime(value);
+    auto [payload, tombstone_dpt] = ParsePackedValueWithDPT(unpacked_value);
+    const uint64_t expiration_time =
+        tombstone_time+
+        GetPTTL(tombstone_dpt, 0, moptions_.num_levels + 1,
+                moptions_.max_bytes_for_level_multiplier);
+    uint64_t min_expiration_time = min_expiration_time_.LoadRelaxed();
+    while (expiration_time < min_expiration_time &&
+           !min_expiration_time_.CasWeakRelaxed(min_expiration_time,
+                                               expiration_time)) {
+    }
+  }
+  if (!allow_concurrent) {
+    UpdateFlushState();
+  }
+
   if (type == kTypeRangeDeletion) {
     auto new_cache = std::make_shared<FragmentedRangeTombstoneListCache>();
     size_t size = cached_range_tombstone_.Size();

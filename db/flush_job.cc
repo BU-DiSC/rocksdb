@@ -1096,7 +1096,8 @@ Status FlushJob::WriteLevel0Table() {
                    meta_.file_checksum, meta_.file_checksum_func_name,
                    meta_.unique_id, meta_.compensated_range_deletion_size,
                    meta_.tail_size, meta_.user_defined_timestamps_persisted,
-                   meta_.fd.expiration_time);
+                   meta_.fd.expiration_time, meta_.fd.shortest_partial_ttl,
+                   meta_.fd.earliest_level_insertion_time);
     edit_->SetBlobFileAdditions(std::move(blob_file_additions));
   }
   // Piggyback FlushJobInfo on the first first flushed memtable.

@@ -111,6 +111,9 @@ enum NewFileCustomTag : uint32_t {
   kCompensatedRangeDeletionSize = 14,
   kTailSize = 15,
   kUserDefinedTimestampsPersisted = 16,
+  kExpirationTime = 17,
+  kShortestPartialTtl = 18,
+  kEarliestLevelInsertionTime = 19,
 
   // If this bit for the custom tag is set, opening DB should fail if
   // we don't know this field.
@@ -128,6 +131,8 @@ constexpr uint64_t kUnknownNewestKeyTime = 0;
 constexpr uint64_t kUnknownFileCreationTime = 0;
 constexpr uint64_t kUnknownEpochNumber = 0;
 constexpr uint64_t kUnknownExpirationTime = 0;
+constexpr uint64_t kUnknownShortestPartialTtl = 0;
+constexpr uint64_t kUnknownEarliestLevelInsertionTime = 0;
 // If `Options::allow_ingest_behind` is true, this epoch number
 // If `Options::cf_allow_ingest_behind` is true, this epoch number
 // will be dedicated to files ingested behind.
@@ -148,6 +153,8 @@ struct FileDescriptor {
   SequenceNumber smallest_seqno;  // The smallest seqno in this file
   SequenceNumber largest_seqno;   // The largest seqno in this file
   uint64_t expiration_time;       // Unix time when the SST file expires in current level
+  uint64_t shortest_partial_ttl;  // Shortest amount of time a tombstone can spend on this level
+  uint64_t earliest_level_insertion_time; //earliest time a tombstone in this file was in this level. 
 
   FileDescriptor() : FileDescriptor(0, 0, 0) {}
 
@@ -156,13 +163,18 @@ struct FileDescriptor {
 
   FileDescriptor(uint64_t number, uint32_t path_id, uint64_t _file_size,
                  SequenceNumber _smallest_seqno, SequenceNumber _largest_seqno,
-                 uint64_t _expiration_time = kUnknownExpirationTime)
+                 uint64_t _expiration_time = kUnknownExpirationTime,
+                 uint64_t _shortest_partial_ttl = kUnknownShortestPartialTtl,
+                 uint64_t _earliest_level_insertion_time =
+                     kUnknownEarliestLevelInsertionTime)
       : table_reader(nullptr),
         packed_number_and_path_id(PackFileNumberAndPathId(number, path_id)),
         file_size(_file_size),
         smallest_seqno(_smallest_seqno),
         largest_seqno(_largest_seqno),
-        expiration_time(_expiration_time) {}
+        expiration_time(_expiration_time),
+        shortest_partial_ttl(_shortest_partial_ttl),
+        earliest_level_insertion_time(_earliest_level_insertion_time) {}
 
   FileDescriptor(const FileDescriptor& fd) { *this = fd; }
 
@@ -173,6 +185,8 @@ struct FileDescriptor {
     smallest_seqno = fd.smallest_seqno;
     largest_seqno = fd.largest_seqno;
     expiration_time = fd.expiration_time;
+    shortest_partial_ttl = fd.shortest_partial_ttl;
+    earliest_level_insertion_time = fd.earliest_level_insertion_time;
     return *this;
   }
 
@@ -295,9 +309,14 @@ struct FileMetaData {
                UniqueId64x2 _unique_id,
                const uint64_t _compensated_range_deletion_size,
                uint64_t _tail_size, bool _user_defined_timestamps_persisted,
-               const uint64_t _expiration_time = kUnknownExpirationTime)
+               const uint64_t _expiration_time = kUnknownExpirationTime,
+               const uint64_t _shortest_partial_ttl =
+                   kUnknownShortestPartialTtl,
+               const uint64_t _earliest_level_insertion_time =
+                   kUnknownEarliestLevelInsertionTime)
       : fd(file, file_path_id, file_size, smallest_seq, largest_seq,
-           _expiration_time),
+           _expiration_time, _shortest_partial_ttl,
+           _earliest_level_insertion_time),
         smallest(smallest_key),
         largest(largest_key),
         compensated_range_deletion_size(_compensated_range_deletion_size),
@@ -746,7 +765,10 @@ class VersionEdit {
                const UniqueId64x2& unique_id,
                const uint64_t compensated_range_deletion_size,
                uint64_t tail_size, bool user_defined_timestamps_persisted,
-               uint64_t expiration_time = kUnknownExpirationTime) {
+               uint64_t expiration_time = kUnknownExpirationTime,
+               uint64_t shortest_partial_ttl = kUnknownShortestPartialTtl,
+               uint64_t earliest_level_insertion_time =
+                   kUnknownEarliestLevelInsertionTime) {
     assert(smallest_seqno <= largest_seqno);
     new_files_.emplace_back(
         level,
@@ -756,7 +778,8 @@ class VersionEdit {
                      file_creation_time, epoch_number, file_checksum,
                      file_checksum_func_name, unique_id,
                      compensated_range_deletion_size, tail_size,
-                     user_defined_timestamps_persisted, expiration_time));
+                     user_defined_timestamps_persisted, expiration_time,
+                     shortest_partial_ttl, earliest_level_insertion_time));
     files_to_quarantine_.push_back(file);
     if (!HasLastSequence() || largest_seqno > GetLastSequence()) {
       SetLastSequence(largest_seqno);

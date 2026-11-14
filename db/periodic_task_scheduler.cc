@@ -26,7 +26,8 @@ static const std::map<PeriodicTaskType, uint64_t> kDefaultPeriodSeconds = {
     {PeriodicTaskType::kPersistStats, kInvalidPeriodSec},
     {PeriodicTaskType::kFlushInfoLog, 10},
     {PeriodicTaskType::kRecordSeqnoTime, kInvalidPeriodSec},
-    {PeriodicTaskType::kTriggerCompaction, 12 * 60 * 60}  // 12 hours
+    {PeriodicTaskType::kTriggerCompaction, 12 * 60 * 60},  // 12 hours
+    {PeriodicTaskType::kFlushExpiredMemTables, 1},
 };
 
 static const std::map<PeriodicTaskType, std::string> kPeriodicTaskTypeNames = {
@@ -35,6 +36,7 @@ static const std::map<PeriodicTaskType, std::string> kPeriodicTaskTypeNames = {
     {PeriodicTaskType::kFlushInfoLog, "flush_info_log"},
     {PeriodicTaskType::kRecordSeqnoTime, "record_seq_time"},
     {PeriodicTaskType::kTriggerCompaction, "trigger_compaction"},
+    {PeriodicTaskType::kFlushExpiredMemTables, "flush_expired_memtables"},
 };
 
 Status PeriodicTaskScheduler::Register(PeriodicTaskType task_type,

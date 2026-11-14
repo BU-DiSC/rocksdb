@@ -109,18 +109,20 @@ TEST_F(PeriodicTaskSchedulerTest, Basic) {
   ASSERT_EQ(3, pst_st_counter);
   ASSERT_EQ(4, flush_info_log_counter);
 
-  ASSERT_EQ(2u, scheduler.TEST_GetValidTaskNum());
+  ASSERT_EQ(3u, scheduler.TEST_GetValidTaskNum());
 
   // Re-enable one task
   ASSERT_OK(dbfull()->SetDBOptions({{"stats_dump_period_sec", "5"}}));
   ASSERT_EQ(5u, dbfull()->GetDBOptions().stats_dump_period_sec);
   ASSERT_EQ(0u, dbfull()->GetDBOptions().stats_persist_period_sec);
 
-  ASSERT_EQ(3, scheduler.TEST_GetValidTaskNum());
+  ASSERT_EQ(4, scheduler.TEST_GetValidTaskNum());
 
+  dbfull()->TEST_WaitForPeriodicTaskRun([] {});
+  const int dump_st_before_run = dump_st_counter;
   dbfull()->TEST_WaitForPeriodicTaskRun(
       [&] { mock_clock_->MockSleepForSeconds(static_cast<int>(kPeriodSec)); });
-  ASSERT_EQ(4, dump_st_counter);
+  ASSERT_EQ(dump_st_before_run + 1, dump_st_counter);
   ASSERT_EQ(3, pst_st_counter);
   ASSERT_EQ(5, flush_info_log_counter);
 
@@ -134,6 +136,45 @@ TEST_F(PeriodicTaskSchedulerTest, Basic) {
   });
   ASSERT_EQ(2, trigger_compaction_counter);
 
+  Close();
+}
+
+TEST_F(PeriodicTaskSchedulerTest, FlushExpiredMemtablesWithoutWrites) {
+  for (bool atomic_flush : {false, true}) {
+    Close();
+    Options options;
+    options.create_if_missing = true;
+    options.env = mock_env_.get();
+    options.num_levels = 3;
+    options.disable_auto_compactions = true;
+    options.atomic_flush = atomic_flush;
+    DestroyAndReopen(options);
+
+    ASSERT_OK(Put("live", "value"));
+    // These options give this tombstone a five-second memtable PTTL.
+    ASSERT_OK(db_->Delete(WriteOptions(), db_->DefaultColumnFamily(),
+                           "deleted", uint64_t{60}));
+    uint64_t entries = 0;
+    ASSERT_TRUE(db_->GetIntProperty("rocksdb.num-entries-active-mem-table",
+                                     &entries));
+    ASSERT_EQ(2u, entries);
+
+    dbfull()->TEST_WaitForPeriodicTaskRun(
+        [&] { mock_clock_->MockSleepForSeconds(3); });
+    ASSERT_TRUE(db_->GetIntProperty("rocksdb.num-entries-active-mem-table",
+                                     &entries));
+    ASSERT_EQ(2u, entries);
+
+    // No writes or manual flush requests after advancing past the deadline.
+    dbfull()->TEST_WaitForPeriodicTaskRun(
+        [&] { mock_clock_->MockSleepForSeconds(3); });
+    ASSERT_OK(dbfull()->TEST_WaitForFlushMemTable());
+    ASSERT_TRUE(db_->GetIntProperty("rocksdb.num-entries-active-mem-table",
+                                     &entries));
+    ASSERT_EQ(0u, entries);
+    ASSERT_EQ(1, NumTableFilesAtLevel(0));
+    ASSERT_EQ("value", Get("live"));
+  }
   Close();
 }
 

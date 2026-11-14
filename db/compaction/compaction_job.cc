@@ -1509,12 +1509,14 @@ Status CompactionJob::ProcessKeyValue(
       "CompactionJob::ProcessKeyValueCompaction()::Processing",
       static_cast<void*>(const_cast<Compaction*>(sub_compact->compaction)));
   uint64_t last_cpu_micros = prev_cpu_micros;
-  uint64_t min_expiration_time = std::numeric_limits<uint64_t>::max();
+  const Compaction* c = sub_compact->compaction;
   while (status.ok() && !cfd->IsDropped() && c_iter->Valid() &&
          c_iter->status().ok()) {
     assert(!end.has_value() ||
            cfd->user_comparator()->Compare(c_iter->user_key(), *end) < 0);
 
+    uint64_t level_insertion_time = 0;
+    uint64_t partial_ttl = 0;
     if (c_iter->ikey().type == kTypeDeletion) {
       Slice unpacked_value;
       uint64_t tombstone_time;
@@ -1523,6 +1525,7 @@ Status CompactionJob::ProcessKeyValue(
           ParsePackedValueWithDPT(c_iter->value());
       std::tie(unpacked_value, tombstone_dpt) =
           ParsePackedValueWithDPT(unpacked_value);
+
       if (tombstone_dpt > 0) {
         ROCKS_LOG_INFO(db_options_.info_log,
                        "(FADE) CompactionJob::ProcessKeyValueCompaction: "
@@ -1531,14 +1534,12 @@ Status CompactionJob::ProcessKeyValue(
                        c_iter->user_key().data(), tombstone_time,
                        tombstone_dpt);
       }
-      min_expiration_time = std::min(
-          min_expiration_time,
-          tombstone_time +
-              GetLevelDPT(
-                  tombstone_dpt, sub_compact->compaction->output_level(),
-                  sub_compact->compaction->immutable_options().num_levels,
-                  sub_compact->compaction->mutable_cf_options()
-                  .max_bytes_for_level_multiplier));
+      level_insertion_time = GetILIT(
+          tombstone_dpt, tombstone_time, c->output_level()+1, c->immutable_options().num_levels+1,
+          c->mutable_cf_options().max_bytes_for_level_multiplier);
+      partial_ttl = GetPTTL(
+          tombstone_dpt, c->output_level()+1, c->immutable_options().num_levels+1,
+          c->mutable_cf_options().max_bytes_for_level_multiplier);
     }
 
     if (c_iter->iter_stats().num_input_records % kRecordStatsEvery ==
@@ -1588,6 +1589,15 @@ Status CompactionJob::ProcessKeyValue(
       break;
     }
 
+    if (ikey.type == kTypeDeletion) {
+      auto& fd = sub_compact->Current().GetMetaData()->fd;
+      fd.expiration_time =
+          std::min(fd.expiration_time, level_insertion_time + partial_ttl);
+      fd.shortest_partial_ttl = std::min(fd.shortest_partial_ttl, partial_ttl);
+      fd.earliest_level_insertion_time =
+          std::min(fd.earliest_level_insertion_time, level_insertion_time);
+    }
+
     TEST_SYNC_POINT_CALLBACK("CompactionJob::Run():PausingManualCompaction:2",
                              static_cast<void*>(const_cast<std::atomic<bool>*>(
                                  &manual_compaction_canceled_)));
@@ -1608,12 +1618,13 @@ Status CompactionJob::ProcessKeyValue(
 #endif  // NDEBUG
   }
 
-  sub_compact->Current().GetMetaData()->fd.expiration_time =
-      min_expiration_time;
-  ROCKS_LOG_INFO(db_options_.info_log,
-                 "(FADE) CompactionJob::ProcessKeyValueCompaction: "
-                 "file expiration time = %lu to level %d",
-                 min_expiration_time, sub_compact->compaction->output_level());
+  if (sub_compact->Current().HasOutput()) {
+    ROCKS_LOG_INFO(db_options_.info_log,
+                   "(FADE) CompactionJob::ProcessKeyValueCompaction: "
+                   "file expiration time = %lu to level %d",
+                   sub_compact->Current().GetMetaData()->fd.expiration_time,
+                   sub_compact->compaction->output_level());
+  }
 
   return status;
 }
@@ -2394,6 +2405,10 @@ Status CompactionJob::OpenCompactionOutputFile(SubcompactionState* sub_compact,
     FileMetaData meta;
     meta.fd = FileDescriptor(file_number,
                              sub_compact->compaction->output_path_id(), 0);
+    meta.fd.expiration_time = std::numeric_limits<uint64_t>::max();
+    meta.fd.shortest_partial_ttl = std::numeric_limits<uint64_t>::max();
+    meta.fd.earliest_level_insertion_time =
+        std::numeric_limits<uint64_t>::max();
     meta.oldest_ancester_time = oldest_ancester_time;
     meta.file_creation_time = current_time;
     meta.epoch_number = epoch_number;

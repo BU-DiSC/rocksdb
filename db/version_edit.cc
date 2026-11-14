@@ -240,6 +240,27 @@ void VersionEdit::EncodeToNewFile4(const FileMetaData& f, int level,
   PutVarint64(&varint_epoch_number, f.epoch_number);
   PutLengthPrefixedSlice(dst, Slice(varint_epoch_number));
 
+  if (f.fd.expiration_time != kUnknownExpirationTime) {
+    PutVarint32(dst, NewFileCustomTag::kExpirationTime);
+    std::string expiration_time;
+    PutVarint64(&expiration_time, f.fd.expiration_time);
+    PutLengthPrefixedSlice(dst, Slice(expiration_time));
+  }
+  if (f.fd.shortest_partial_ttl != kUnknownShortestPartialTtl) {
+    PutVarint32(dst, NewFileCustomTag::kShortestPartialTtl);
+    std::string shortest_partial_ttl;
+    PutVarint64(&shortest_partial_ttl, f.fd.shortest_partial_ttl);
+    PutLengthPrefixedSlice(dst, Slice(shortest_partial_ttl));
+  }
+  if (f.fd.earliest_level_insertion_time !=
+      kUnknownEarliestLevelInsertionTime) {
+    PutVarint32(dst, NewFileCustomTag::kEarliestLevelInsertionTime);
+    std::string earliest_level_insertion_time;
+    PutVarint64(&earliest_level_insertion_time,
+                f.fd.earliest_level_insertion_time);
+    PutLengthPrefixedSlice(dst, Slice(earliest_level_insertion_time));
+  }
+
   if (f.file_checksum_func_name != kUnknownFileChecksumFuncName) {
     PutVarint32(dst, NewFileCustomTag::kFileChecksum);
     PutLengthPrefixedSlice(dst, Slice(f.file_checksum));
@@ -343,6 +364,9 @@ const char* VersionEdit::DecodeNewFile4From(Slice* input, int& max_level,
   uint64_t file_size = 0;
   SequenceNumber smallest_seqno = 0;
   SequenceNumber largest_seqno = kMaxSequenceNumber;
+  uint64_t expiration_time = kUnknownExpirationTime;
+  uint64_t shortest_partial_ttl = kUnknownShortestPartialTtl;
+  uint64_t earliest_level_insertion_time = kUnknownEarliestLevelInsertionTime;
   if (GetLevel(input, &level, max_level) && GetVarint64(input, &number) &&
       GetVarint64(input, &file_size) && GetInternalKey(input, &f.smallest) &&
       GetInternalKey(input, &f.largest) &&
@@ -384,6 +408,21 @@ const char* VersionEdit::DecodeNewFile4From(Slice* input, int& max_level,
         case kEpochNumber:
           if (!GetVarint64(&field, &f.epoch_number)) {
             return "invalid epoch number";
+          }
+          break;
+        case kExpirationTime:
+          if (!GetVarint64(&field, &expiration_time)) {
+            return "invalid expiration time";
+          }
+          break;
+        case kShortestPartialTtl:
+          if (!GetVarint64(&field, &shortest_partial_ttl)) {
+            return "invalid shortest partial TTL";
+          }
+          break;
+        case kEarliestLevelInsertionTime:
+          if (!GetVarint64(&field, &earliest_level_insertion_time)) {
+            return "invalid earliest level insertion time";
           }
           break;
         case kFileChecksum:
@@ -454,8 +493,9 @@ const char* VersionEdit::DecodeNewFile4From(Slice* input, int& max_level,
   } else {
     return "new-file4 entry";
   }
-  f.fd =
-      FileDescriptor(number, path_id, file_size, smallest_seqno, largest_seqno);
+  f.fd = FileDescriptor(number, path_id, file_size, smallest_seqno,
+                        largest_seqno, expiration_time, shortest_partial_ttl,
+                        earliest_level_insertion_time);
   new_files.emplace_back(level, f);
   return nullptr;
 }

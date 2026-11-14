@@ -7141,7 +7141,8 @@ Status VersionSet::WriteCurrentStateToManifest(
               f->file_creation_time, f->epoch_number, f->file_checksum,
               f->file_checksum_func_name, f->unique_id,
               f->compensated_range_deletion_size, f->tail_size,
-              f->user_defined_timestamps_persisted, f->fd.expiration_time);
+              f->user_defined_timestamps_persisted, f->fd.expiration_time,
+              f->fd.shortest_partial_ttl, f->fd.earliest_level_insertion_time);
         }
       }
 

@@ -1441,6 +1441,18 @@ Status DBImpl::PerformTrivialMove(Compaction& c, LogBuffer* log_buffer,
     }
     for (size_t i = 0; i < c.num_input_files(l); i++) {
       FileMetaData* f = c.input(l, i);
+      const int from_level = c.level(l);
+      const int to_level = c.output_level();
+
+      const int total_levels = c.number_levels();
+
+      int64_t current_time = 0;
+      rocksdb::SystemClock::Default()
+                ->GetCurrentTime(&current_time)
+                .PermitUncheckedError();
+
+      const double size_ratio =
+            c.mutable_cf_options().max_bytes_for_level_multiplier;
       c.edit()->DeleteFile(c.level(l), f->fd.GetNumber());
       c.edit()->AddFile(c.output_level(), f->fd.GetNumber(), f->fd.GetPathId(),
                         f->fd.GetFileSize(), f->smallest, f->largest,
@@ -1450,7 +1462,12 @@ Status DBImpl::PerformTrivialMove(Compaction& c, LogBuffer* log_buffer,
                         f->file_creation_time, f->epoch_number,
                         f->file_checksum, f->file_checksum_func_name,
                         f->unique_id, f->compensated_range_deletion_size,
-                        f->tail_size, f->user_defined_timestamps_persisted);
+                        f->tail_size, f->user_defined_timestamps_persisted,
+                        current_time + //currently correct but may be a better way to do this
+                            f->fd.shortest_partial_ttl *
+                                pow(size_ratio, to_level - from_level),
+                        f->fd.shortest_partial_ttl,
+                        f->fd.earliest_level_insertion_time);
       moved_bytes += static_cast<size_t>(c.input(l, i)->fd.GetFileSize());
       ROCKS_LOG_BUFFER(
           log_buffer, "[%s] Moved #%" PRIu64 " to level-%d %" PRIu64 " bytes\n",
@@ -1972,7 +1989,8 @@ Status DBImpl::ReFitLevel(ColumnFamilyData* cfd, int level, int target_level) {
           f->oldest_ancester_time, f->file_creation_time, f->epoch_number,
           f->file_checksum, f->file_checksum_func_name, f->unique_id,
           f->compensated_range_deletion_size, f->tail_size,
-          f->user_defined_timestamps_persisted, f->fd.expiration_time);
+          f->user_defined_timestamps_persisted, f->fd.expiration_time,
+          f->fd.shortest_partial_ttl, f->fd.earliest_level_insertion_time);
     }
     ROCKS_LOG_DEBUG(immutable_db_options_.info_log,
                     "[%s] Apply version edit:\n%s", cfd->GetName().c_str(),
@@ -2051,6 +2069,47 @@ Status DBImpl::FlushAllColumnFamilies(const FlushOptions& flush_options,
     }
   }
   return status;
+}
+
+void DBImpl::FlushExpiredMemTables() {
+  InstrumentedMutexLock lock(&mutex_);
+  if (!opened_successfully_ || shutting_down_.load(std::memory_order_acquire) ||
+      reject_new_background_jobs_ || bg_work_paused_ > 0 ||
+      error_handler_.IsBGWorkStopped()) {
+    return;
+  }
+
+  int64_t current_time = 0;
+  Status s = immutable_db_options_.clock->GetCurrentTime(&current_time);
+  if (!s.ok()) {
+    return;
+  }
+
+  FlushOptions flush_options;
+  flush_options.wait = false;
+  flush_options.allow_write_stall = true;
+  for (auto* cfd : versions_->GetRefedColumnFamilySet()) {
+    if (cfd->IsDropped() || !cfd->initialized() ||
+        !cfd->mem()->HasExpiredTombstones(
+            static_cast<uint64_t>(current_time))) {
+      continue;
+    }
+
+    // The flush path acquires the DB mutex and coordinates with writers.
+    mutex_.Unlock();
+    s = immutable_db_options_.atomic_flush
+            ? AtomicFlushMemTables(flush_options, FlushReason::kOthers)
+            : FlushMemTable(cfd, flush_options, FlushReason::kOthers);
+    mutex_.Lock();
+    if (!s.ok() && !s.IsTryAgain() && !s.IsColumnFamilyDropped()) {
+      ROCKS_LOG_WARN(immutable_db_options_.info_log,
+                     "Failed to flush expired memtable: %s",
+                     s.ToString().c_str());
+    }
+    if (immutable_db_options_.atomic_flush) {
+      break;
+    }
+  }
 }
 
 Status DBImpl::Flush(const FlushOptions& flush_options,

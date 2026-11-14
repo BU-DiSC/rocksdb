@@ -9,6 +9,8 @@
 
 #include "db/version_edit.h"
 
+#include <limits>
+
 #include "db/blob/blob_index.h"
 #include "rocksdb/advanced_options.h"
 #include "table/unique_id_impl.h"
@@ -67,6 +69,7 @@ TEST_F(VersionEditTest, EncodeDecode) {
 
 TEST_F(VersionEditTest, EncodeDecodeNewFile4) {
   static const uint64_t kBig = 1ull << 50;
+  const uint64_t max_time = std::numeric_limits<uint64_t>::max();
 
   VersionEdit edit;
   edit.AddFile(3, 300, 3, 100, InternalKey("foo", kBig + 500, kTypeValue),
@@ -74,7 +77,8 @@ TEST_F(VersionEditTest, EncodeDecodeNewFile4) {
                kBig + 600, true, Temperature::kUnknown, kInvalidBlobFileNumber,
                kUnknownOldestAncesterTime, kUnknownFileCreationTime,
                300 /* epoch_number */, kUnknownFileChecksum,
-               kUnknownFileChecksumFuncName, kNullUniqueId64x2, 0, 0, true);
+               kUnknownFileChecksumFuncName, kNullUniqueId64x2, 0, 0, true,
+               kBig + 100, kBig + 200, kBig + 300);
   edit.AddFile(4, 301, 3, 100, InternalKey("foo", kBig + 501, kTypeValue),
                InternalKey("zoo", kBig + 601, kTypeDeletion), kBig + 501,
                kBig + 601, false, Temperature::kUnknown, kInvalidBlobFileNumber,
@@ -85,7 +89,8 @@ TEST_F(VersionEditTest, EncodeDecodeNewFile4) {
                InternalKey("zoo", kBig + 602, kTypeDeletion), kBig + 502,
                kBig + 602, true, Temperature::kUnknown, kInvalidBlobFileNumber,
                666, 888, 302 /* epoch_number */, kUnknownFileChecksum,
-               kUnknownFileChecksumFuncName, kNullUniqueId64x2, 0, 0, true);
+               kUnknownFileChecksumFuncName, kNullUniqueId64x2, 0, 0, true,
+               max_time, max_time, max_time);
   edit.AddFile(5, 303, 0, 100, InternalKey("foo", kBig + 503, kTypeBlobIndex),
                InternalKey("zoo", kBig + 603, kTypeBlobIndex), kBig + 503,
                kBig + 603, true, Temperature::kUnknown, 1001,
@@ -123,6 +128,19 @@ TEST_F(VersionEditTest, EncodeDecodeNewFile4) {
   ASSERT_EQ(kInvalidBlobFileNumber,
             new_files[2].second.oldest_blob_file_number);
   ASSERT_EQ(1001, new_files[3].second.oldest_blob_file_number);
+  ASSERT_EQ(kBig + 100, new_files[0].second.fd.expiration_time);
+  ASSERT_EQ(kBig + 200, new_files[0].second.fd.shortest_partial_ttl);
+  ASSERT_EQ(kBig + 300, new_files[0].second.fd.earliest_level_insertion_time);
+  ASSERT_EQ(max_time, new_files[2].second.fd.expiration_time);
+  ASSERT_EQ(max_time, new_files[2].second.fd.shortest_partial_ttl);
+  ASSERT_EQ(max_time, new_files[2].second.fd.earliest_level_insertion_time);
+  for (size_t i : {1, 3}) {
+    ASSERT_EQ(kUnknownExpirationTime, new_files[i].second.fd.expiration_time);
+    ASSERT_EQ(kUnknownShortestPartialTtl,
+              new_files[i].second.fd.shortest_partial_ttl);
+    ASSERT_EQ(kUnknownEarliestLevelInsertionTime,
+              new_files[i].second.fd.earliest_level_insertion_time);
+  }
   ASSERT_TRUE(new_files[0].second.user_defined_timestamps_persisted);
   ASSERT_FALSE(new_files[1].second.user_defined_timestamps_persisted);
   ASSERT_TRUE(new_files[2].second.user_defined_timestamps_persisted);

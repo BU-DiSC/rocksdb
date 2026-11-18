@@ -1463,11 +1463,14 @@ Status DBImpl::PerformTrivialMove(Compaction& c, LogBuffer* log_buffer,
                         f->file_checksum, f->file_checksum_func_name,
                         f->unique_id, f->compensated_range_deletion_size,
                         f->tail_size, f->user_defined_timestamps_persisted,
-                        current_time + //currently correct but may be a better way to do this
+                        f->fd.earliest_level_insertion_time + //new FACT
+                            f->fd.shortest_partial_ttl +
                             f->fd.shortest_partial_ttl *
-                                pow(size_ratio, to_level - from_level),
-                        f->fd.shortest_partial_ttl,
-                        f->fd.earliest_level_insertion_time);
+                                size_ratio,
+                        f->fd.shortest_partial_ttl * //new SPTTL
+                                size_ratio,
+                        f->fd.earliest_level_insertion_time + //new ELIT
+                           f->fd.shortest_partial_ttl );
       moved_bytes += static_cast<size_t>(c.input(l, i)->fd.GetFileSize());
       ROCKS_LOG_BUFFER(
           log_buffer, "[%s] Moved #%" PRIu64 " to level-%d %" PRIu64 " bytes\n",

@@ -153,7 +153,7 @@ TEST_F(PeriodicTaskSchedulerTest, FlushExpiredMemtablesWithoutWrites) {
     ASSERT_OK(Put("live", "value"));
     // These options give this tombstone a five-second memtable PTTL.
     ASSERT_OK(db_->Delete(WriteOptions(), db_->DefaultColumnFamily(),
-                           "deleted", uint64_t{60}));
+                           "deleted", uint64_t{600}));
     uint64_t entries = 0;
     ASSERT_TRUE(db_->GetIntProperty("rocksdb.num-entries-active-mem-table",
                                      &entries));

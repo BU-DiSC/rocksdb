@@ -3994,7 +3994,7 @@ void VersionStorageInfo::ComputeExpiredDPTFiles(
   const uint64_t current_time = static_cast<uint64_t>(_current_time);
   for (int level = 0; level < num_levels() - 1; level++) {
     for (FileMetaData* f : files_[level]) {
-      if (!f->being_compacted && f->fd.expiration_time < current_time) {
+      if (!f->being_compacted && f->fd.expiration_time <= current_time) {
         expired_dpt_files_.emplace_back(level, f);
       }
     }
